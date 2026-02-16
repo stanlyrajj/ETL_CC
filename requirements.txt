@@ -1,0 +1,15 @@
+# Core processing libraries
+pymupdf
+ftfy
+sentence-transformers
+chromadb
+spacy
+
+# Database
+psycopg2-binary
+sqlalchemy
+
+# API
+fastapi
+uvicorn
+pydantic
