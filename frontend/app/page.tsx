@@ -279,8 +279,16 @@ export default function App() {
   const bottomRef  = useRef<HTMLDivElement>(null);
   const inputRef   = useRef<HTMLTextAreaElement>(null);
   const esRefs     = useRef<Record<string, EventSource>>({});
+  const searchingRef = useRef(false); // synchronous guard — immune to React batching
 
-  useEffect(() => { fetchSessions(); }, []);
+  useEffect(() => {
+    fetchSessions();
+    return () => {
+      // Close all open SSE connections on unmount to prevent memory leaks
+      Object.values(esRefs.current).forEach(es => es.close());
+      esRefs.current = {};
+    };
+  }, []);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -295,8 +303,14 @@ export default function App() {
   // ── Search ────────────────────────────────────────────────────────────────
 
   async function handleSearch() {
+    if (searchingRef.current) return;          // synchronous guard
+    searchingRef.current = true;
     const t = filters.topic.trim();
-    if (t.length < 3) { setSearchError("Enter at least 3 characters."); return; }
+    if (t.length < 3) {
+      searchingRef.current = false;
+      setSearchError("Enter at least 3 characters.");
+      return;
+    }
     setSearching(true);
     setSearchError("");
     setView("loading");
@@ -339,6 +353,7 @@ export default function App() {
       setSearchError(e.message || "Search failed.");
       setView("search");
     } finally {
+      searchingRef.current = false;
       setSearching(false);
     }
   }
@@ -398,7 +413,11 @@ export default function App() {
       } catch {}
 
       setTimeout(() => inputRef.current?.focus(), 100);
-    } catch {}
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to load session";
+      setChatError(`Could not load session: ${msg}`);
+      setView("chat");
+    }
   }
 
   async function sendMessage() {

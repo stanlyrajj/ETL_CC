@@ -1,22 +1,23 @@
 """
 processor.py — Paper extraction, chunking, embedding, and vector storage.
 
-Fixes vs previous version:
-  - Retry logic (3 attempts, exponential backoff) on all external calls
-  - Minimum chunk size validation (cfg.MIN_CHUNK_CHARS)
-  - Embedding runs in thread pool executor (non-blocking)
-  - Explicit failure when PDF yields < 100 chars (not silent empty)
-  - ChromaDB path from config (absolute, not relative)
-  - Parallel slide rendering removed to here for carousel
+Fixes applied:
+  LOG-09: VectorStore accepts injected EmbeddingGenerator — no per-query model reload.
+          Module-level vector_store = pipeline.vector_store (single shared instance).
+  PERF-01: generate_for_chunks() processes in batches of cfg.MAX_EMBEDDING_BATCH_SIZE
+           to prevent OOM on large papers (500+ chunks).
+  PERF-02: with_retry() immediately re-raises PERMANENT_ERRORS (ValueError,
+           JSONDecodeError, UnicodeDecodeError) without sleeping — wasted retries eliminated.
 """
 
 import asyncio
+import json
 import logging
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from config import cfg
 
@@ -26,9 +27,17 @@ logger = logging.getLogger(__name__)
 # ── Retry decorator ───────────────────────────────────────────────────────────
 
 def with_retry(max_attempts: int = None, backoff_base: float = None):
-    """Sync retry decorator with exponential backoff."""
+    """
+    Sync retry decorator with exponential backoff.
+
+    PERF-02: PERMANENT_ERRORS are re-raised immediately without sleeping.
+    Only transient errors (network I/O, timeouts) are retried.
+    """
     _max = max_attempts or cfg.MAX_RETRIES
     _base = backoff_base or cfg.RETRY_BACKOFF_BASE
+
+    # PERF-02: data errors are permanent — retrying never helps
+    _PERMANENT = (ValueError, json.JSONDecodeError, UnicodeDecodeError)
 
     def decorator(func):
         def wrapper(*args, **kwargs):
@@ -36,6 +45,8 @@ def with_retry(max_attempts: int = None, backoff_base: float = None):
             for attempt in range(1, _max + 1):
                 try:
                     return func(*args, **kwargs)
+                except _PERMANENT:
+                    raise  # immediate re-raise — no sleep, no retry
                 except Exception as exc:
                     last_exc = exc
                     if attempt < _max:
@@ -136,11 +147,9 @@ class PDFExtractor:
     def _clean_text(self, text: str) -> str:
         import ftfy
         text = ftfy.fix_text(text)
-        # Remove ligatures
         ligatures = {"ﬁ": "fi", "ﬂ": "fl", "ﬀ": "ff", "ﬃ": "ffi", "ﬄ": "ffl"}
         for lig, rep in ligatures.items():
             text = text.replace(lig, rep)
-        # Collapse excessive whitespace
         text = re.sub(r"\n{3,}", "\n\n", text)
         text = re.sub(r" {2,}", " ", text)
         return text.strip()
@@ -176,7 +185,6 @@ class PDFExtractor:
             if not matched:
                 current_lines.append(line)
 
-        # Final section
         if current_lines:
             content = "\n".join(current_lines).strip()
             if len(content) >= cfg.MIN_CHUNK_CHARS:
@@ -202,7 +210,6 @@ class PDFExtractor:
         for s in sections:
             if "abstract" in s.section_type.lower():
                 return s.content[:1000]
-        # Fallback: first 500 chars
         return text[:500]
 
 
@@ -211,16 +218,12 @@ class PDFExtractor:
 class PubMedExtractor:
     @with_retry()
     def extract(self, json_path: str) -> ExtractedPaper:
-        import json
-
         paper_id = Path(json_path).stem
         with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        # BioC JSON structure varies — handle both formats
         documents = data.get("documents", data.get("PubTator3", []))
         if not documents:
-            # Try flat structure
             documents = [data]
 
         sections: List[Section] = []
@@ -229,7 +232,7 @@ class PubMedExtractor:
         authors = []
         order = 0
 
-        for doc in documents[:1]:  # Usually one document
+        for doc in documents[:1]:
             passages = doc.get("passages", [])
             if not passages:
                 raise ValueError(f"PubMed JSON '{json_path}' has no passages. Unusual format.")
@@ -252,7 +255,6 @@ class PubMedExtractor:
                     sections.append(Section(ptype, ptype.title(), text, order))
                     order += 1
 
-            # Authors from annotations or metadata
             authors_raw = doc.get("authors", [])
             if isinstance(authors_raw, list):
                 authors = [
@@ -276,11 +278,7 @@ class PubMedExtractor:
 # ── Text Chunker ──────────────────────────────────────────────────────────────
 
 class TextChunker:
-    def __init__(
-        self,
-        chunk_size: int = None,
-        overlap: int = None,
-    ):
+    def __init__(self, chunk_size: int = None, overlap: int = None):
         self.chunk_size = chunk_size or cfg.CHUNK_SIZE
         self.overlap = overlap or cfg.CHUNK_OVERLAP
 
@@ -315,7 +313,6 @@ class TextChunker:
         while start < len(text):
             end = start + self.chunk_size
             if end < len(text):
-                # Try to break at sentence boundary
                 for sep in (". ", ".\n", "? ", "! ", "\n\n"):
                     pos = text.rfind(sep, start + self.overlap, end)
                     if pos != -1:
@@ -348,9 +345,18 @@ class EmbeddingGenerator:
         return model.encode(texts, show_progress_bar=False).tolist()
 
     def generate_for_chunks(self, chunks: List[Chunk]):
-        texts = [c.text for c in chunks]
-        embeddings = self.generate(texts)
-        return list(zip([c.chunk_id for c in chunks], embeddings))
+        """
+        PERF-01: Process chunks in batches to prevent OOM on large papers.
+        Batches of cfg.MAX_EMBEDDING_BATCH_SIZE (default 50) instead of one giant tensor.
+        """
+        batch_sz = cfg.MAX_EMBEDDING_BATCH_SIZE
+        results = []
+        for i in range(0, len(chunks), batch_sz):
+            batch = chunks[i:i + batch_sz]
+            embeddings = self.generate([c.text for c in batch])
+            results.extend(zip([c.chunk_id for c in batch], embeddings))
+            logger.debug(f"Embedded batch {i // batch_sz + 1} ({len(batch)} chunks)")
+        return results
 
 
 # ── Vector Store ──────────────────────────────────────────────────────────────
@@ -358,9 +364,14 @@ class EmbeddingGenerator:
 class VectorStore:
     COLLECTION = "research_papers"
 
-    def __init__(self):
+    def __init__(self, embedder: "EmbeddingGenerator | None" = None):
+        """
+        LOG-09: Accept injected EmbeddingGenerator.
+        When provided, query() reuses it instead of loading a fresh model each call.
+        """
         self._client = None
         self._collection = None
+        self._embedder: "EmbeddingGenerator | None" = embedder
 
     def _get_collection(self):
         if self._collection is None:
@@ -379,7 +390,6 @@ class VectorStore:
         metas = [c.metadata for c in chunks]
         embs = [e for _, e in embeddings]
 
-        # Upsert in batches of 100
         batch = 100
         for i in range(0, len(ids), batch):
             col.upsert(
@@ -397,9 +407,9 @@ class VectorStore:
     ) -> List[Dict]:
         col = self._get_collection()
 
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(cfg.EMBEDDING_MODEL)
-        query_embedding = model.encode([query_text]).tolist()
+        # LOG-09: reuse injected embedder — no per-query model reload (was 90MB RAM spike)
+        embedder = self._embedder or EmbeddingGenerator()
+        query_embedding = embedder.generate([query_text])
 
         kwargs: Dict[str, Any] = {
             "query_embeddings": query_embedding,
@@ -436,7 +446,6 @@ class VectorStore:
         if not results or not results["documents"]:
             return ""
 
-        # Prioritise abstract and intro
         priority = {"abstract": 0, "introduction": 1, "conclusion": 2, "results": 3}
         items = list(zip(results["documents"], results["metadatas"]))
         items.sort(key=lambda x: priority.get(x[1].get("section_type", ""), 99))
@@ -457,7 +466,8 @@ class ProcessingPipeline:
         self.pubmed_extractor = PubMedExtractor()
         self.chunker = TextChunker()
         self.embedder = EmbeddingGenerator()
-        self.vector_store = VectorStore()
+        # LOG-09: inject shared embedder so VectorStore.query() reuses it
+        self.vector_store = VectorStore(embedder=self.embedder)
 
     async def process_paper_async(self, file_path: str, source: str, paper_id: str) -> ExtractedPaper:
         """
@@ -477,7 +487,6 @@ class ProcessingPipeline:
         """Synchronous full pipeline — runs in thread pool."""
         t0 = time.time()
 
-        # 1. Extract
         if source == "arxiv":
             paper = self.pdf_extractor.extract(file_path)
         elif source == "pubmed":
@@ -488,22 +497,19 @@ class ProcessingPipeline:
         paper.paper_id = paper_id
         logger.info(f"[{paper_id}] Extracted {len(paper.sections)} sections in {time.time()-t0:.1f}s")
 
-        # 2. Chunk
         chunks = self.chunker.chunk_sections(paper_id, paper.sections)
         if not chunks:
             raise ValueError(f"[{paper_id}] No chunks produced — paper may be empty or too short.")
         logger.info(f"[{paper_id}] Produced {len(chunks)} chunks")
 
-        # 3. Embed
         t1 = time.time()
+        # PERF-01: batched embedding
         embeddings = self.embedder.generate_for_chunks(chunks)
         logger.info(f"[{paper_id}] Embedded {len(chunks)} chunks in {time.time()-t1:.1f}s")
 
-        # 4. Store in ChromaDB
         self.vector_store.add_chunks(chunks, embeddings)
         logger.info(f"[{paper_id}] Stored in ChromaDB. Total pipeline: {time.time()-t0:.1f}s")
 
-        # Attach chunks to paper object for caller to persist to PostgreSQL
         paper._chunks = chunks
         return paper
 
@@ -511,4 +517,5 @@ class ProcessingPipeline:
 # ── Singletons ────────────────────────────────────────────────────────────────
 
 pipeline = ProcessingPipeline()
-vector_store = VectorStore()
+# LOG-09: single instance — shares embedder and ChromaDB client with the pipeline
+vector_store = pipeline.vector_store

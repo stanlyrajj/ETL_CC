@@ -1,42 +1,79 @@
 """
 app.py — Single unified FastAPI application.
 
-Replaces: main.py + main_part2.py (two separate apps → one).
-
-Routers:
-  /api/papers   — search, download, list, delete
-  /api/process  — SSE progress stream
-  /api/chat     — multi-session teaching chat
-  /api/generate — social content (Twitter, LinkedIn, Carousel)
-  /api/query    — RAG semantic search
-  /health       — health check
-
-Run:
-    uvicorn app:app --reload --port 8000
+Fixes applied (in batch order):
+  Batch 1 — CRITICAL:
+    SEC-01: Prompt injection — paper context sanitized + XML-delimited in gemini_client.py
+    SEC-03: Per-IP rate limiting via slowapi (search=5/min, chat=30/min, generate=3/min)
+            + asyncio.Semaphore(5) caps concurrent pipeline tasks
+    LOG-01: PubMed download switched from efetch (returns XML) to BioC JSON endpoint
+    LOG-02: Idempotency guard expanded to all active stages + _active_pipelines set
+    LOG-03: Orphaned pipeline recovery on startup (_recover_orphaned_pipelines)
+    LOG-04: ChromaDB failure returns 503 instead of silently hallucinating
+  Batch 2 — HIGH:
+    SEC-02: Log filter redacts GEMINI_API_KEY from all log records
+    SEC-04: _safe_filename() + _assert_within_dir() prevent path traversal
+    LOG-05: delete_paper() — ChromaDB deleted before PostgreSQL (no orphaned vectors)
+    LOG-06: RateLimiter uses asyncio.Lock (concurrency-safe, no TOCTOU race)
+    SEC-05: Optional X-API-Key authentication via _auth dependency
+  Batch 3 — HIGH:
+    LOG-08: SSE generators wrapped in try/finally — queues always cleaned on disconnect
+    LOG-10: gemini calls are all awaited (async in gemini_client.py)
+    PERF-03: _search_pubmed() uses async httpx instead of blocking requests.get()
+  Batch 4 — MEDIUM:
+    PERF-05: arxiv.Search iterator runs in thread pool executor (sync HTTP, blocks loop)
+    ARCH-02: Playwright startup check; carousel returns 503 if Chromium missing
 """
 
 import asyncio
 import json
 import logging
 import os
+import re as _re
 import time
 import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
-import requests
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+from starlette.requests import Request
 
 from config import cfg
 from database import db
 from gemini_client import get_gemini
 from processor import pipeline, vector_store
 
+# ── Logging + SEC-02 key-redaction filter ─────────────────────────────────────
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(name)s | %(message)s")
+
+
+class _RedactSecretsFilter(logging.Filter):
+    """Scrub GEMINI_API_KEY from every log record before emission."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        secret = cfg.GEMINI_API_KEY
+        if secret and len(secret) > 8:
+            msg = str(record.msg)
+            if secret in msg:
+                record.msg = msg.replace(secret, "[REDACTED]")
+            if record.args:
+                args = record.args if isinstance(record.args, tuple) else (record.args,)
+                record.args = tuple(
+                    str(a).replace(secret, "[REDACTED]") if isinstance(a, str) else a
+                    for a in args
+                )
+        return True
+
+
+logging.getLogger().addFilter(_RedactSecretsFilter())
 logger = logging.getLogger(__name__)
 
 # ── App setup ─────────────────────────────────────────────────────────────────
@@ -47,6 +84,14 @@ app = FastAPI(
     version="3.0.0",
 )
 
+# SEC-03: per-IP rate limiting
+_limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = _limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# SEC-03: cap concurrent background pipeline tasks to prevent resource exhaustion
+_pipeline_sem = asyncio.Semaphore(5)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cfg.CORS_ORIGINS,
@@ -55,39 +100,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.on_event("startup")
-async def startup():
-    cfg.validate()
-    await db.init()
-    logger.info("ResearchRAG API ready.")
+# SEC-05: optional API key auth
+_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-@app.on_event("shutdown")
-async def shutdown():
-    await db.close()
+async def _auth(key: Optional[str] = Depends(_key_header)) -> None:
+    """Reject requests without valid API key when API_SECRET_KEY is configured."""
+    if cfg.API_SECRET_KEY and key != cfg.API_SECRET_KEY:
+        raise HTTPException(401, "Unauthorized")
 
 
-# ── Rate limiter ──────────────────────────────────────────────────────────────
+# ── Rate limiter (LOG-06: asyncio.Lock makes check-sleep-update atomic) ────────
 
 class RateLimiter:
+    """Concurrency-safe async rate limiter. asyncio.Lock serializes check+sleep+update."""
+
     def __init__(self, min_interval: float):
         self._min = min_interval
         self._last = 0.0
+        self._lock = asyncio.Lock()
 
     async def wait(self):
-        elapsed = time.time() - self._last
-        if elapsed < self._min:
-            await asyncio.sleep(self._min - elapsed)
-        self._last = time.time()
+        async with self._lock:
+            elapsed = time.time() - self._last
+            if elapsed < self._min:
+                await asyncio.sleep(self._min - elapsed)
+            self._last = time.time()
 
 
 arxiv_limiter = RateLimiter(cfg.ARXIV_RATE_LIMIT_SECONDS)
 pubmed_limiter = RateLimiter(cfg.PUBMED_RATE_LIMIT_SECONDS)
 
+# SEC-04: filesystem safety helpers
+def _safe_filename(paper_id: str, max_len: int = 100) -> str:
+    """Sanitize paper_id for filesystem use. Strips everything except [a-zA-Z0-9._-]."""
+    safe = _re.sub(r'[^a-zA-Z0-9._-]', '_', str(paper_id))[:max_len]
+    if not safe or safe in (".", ".."):
+        raise ValueError(f"Unsafe paper_id for filesystem: {paper_id!r}")
+    return safe
+
+
+def _assert_within_dir(path: Path, base_dir: Path) -> None:
+    """Raise ValueError if resolved path would escape base_dir."""
+    if not str(path.resolve()).startswith(str(base_dir.resolve()) + "/"):
+        raise ValueError(f"Path traversal detected: {path} escapes {base_dir}")
+
+
 # ── In-memory SSE event queues ─────────────────────────────────────────────────
-# Maps paper_id → list of SSE event dicts
+
 _sse_queues: Dict[str, asyncio.Queue] = {}
+# LOG-02: track actively-running pipeline tasks (in-memory dedup)
+_active_pipelines: set = set()
 
 
 def _push_event(paper_id: str, event: str, data: Dict):
@@ -99,6 +162,71 @@ def _push_event(paper_id: str, event: str, data: Dict):
             pass
 
 
+# ── LOG-03: Orphaned pipeline recovery ────────────────────────────────────────
+
+async def _recover_orphaned_pipelines() -> None:
+    """On startup: reset and re-queue any papers stuck mid-pipeline from a prior crash."""
+    orphan_stages = ["downloading", "downloaded", "processing"]
+    recovered = 0
+    for stage in orphan_stages:
+        async with db.session() as sess:
+            orphans = await db.list_papers_by_stage(sess, stage=stage, limit=200)
+        for paper in orphans:
+            logger.warning(f"[recovery] {paper.paper_id} stuck at '{stage}' — resetting to pending")
+            async with db.session() as sess:
+                await db.set_stage(sess, paper.paper_id, "pending")
+            paper_data = {
+                "paper_id": paper.paper_id,
+                "source":   paper.source,
+                "title":    paper.title or "",
+                "topic":    (paper.extra_metadata or {}).get("topic", paper.title or paper.paper_id),
+                **(paper.extra_metadata or {}),
+            }
+            _sse_queues[paper.paper_id] = asyncio.Queue(maxsize=50)
+            _active_pipelines.add(paper.paper_id)
+            asyncio.create_task(_full_pipeline_task(paper_data, paper.paper_id))
+            recovered += 1
+    logger.info(
+        f"[recovery] {'No orphaned pipelines.' if not recovered else f'Restarted {recovered} pipeline(s).'}"
+    )
+
+
+# ── ARCH-02: Playwright startup check ─────────────────────────────────────────
+
+_playwright_ok: bool = False
+
+
+async def _check_playwright() -> bool:
+    global _playwright_ok
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as pw:
+            b = await pw.chromium.launch()
+            await b.close()
+        _playwright_ok = True
+        logger.info("[startup] Playwright/Chromium: OK")
+    except Exception as exc:
+        _playwright_ok = False
+        logger.warning(f"[startup] Carousel UNAVAILABLE — run: playwright install chromium  ({exc})")
+    return _playwright_ok
+
+
+# ── Lifecycle ─────────────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+async def startup():
+    cfg.validate()
+    await db.init()
+    await _recover_orphaned_pipelines()  # LOG-03
+    await _check_playwright()            # ARCH-02
+    logger.info("ResearchRAG API ready.")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    await db.close()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PAPERS — Search, Download, List, Delete
 # ══════════════════════════════════════════════════════════════════════════════
@@ -106,10 +234,10 @@ def _push_event(paper_id: str, event: str, data: Dict):
 class SearchRequest(BaseModel):
     topic: str
     limit: int = 5
-    source: str = "both"           # arxiv | pubmed | both
-    date_from: Optional[str] = None  # YYYY-MM-DD
+    source: str = "both"
+    date_from: Optional[str] = None
     date_to: Optional[str] = None
-    sort_by: str = "relevance"     # relevance | date
+    sort_by: str = "relevance"
 
     @validator("topic")
     def topic_not_empty(cls, v):
@@ -138,8 +266,11 @@ async def _search_arxiv(topic: str, limit: int, date_from: str = None) -> List[D
             max_results=limit,
             sort_by=arxiv.SortCriterion.SubmittedDate,
         )
+        # PERF-05: arxiv library uses blocking requests — run in executor
+        loop = asyncio.get_event_loop()
+        _arxiv_results = await loop.run_in_executor(None, lambda: list(search.results()))
         results = []
-        for r in search.results():
+        for r in _arxiv_results:
             results.append({
                 "paper_id": r.entry_id.split("/")[-1],
                 "source": "arxiv",
@@ -163,7 +294,6 @@ async def _search_pubmed(topic: str, limit: int, date_from: str = None) -> List[
         if date_from:
             date_filter = f" AND {date_from}[PDAT]:3000[PDAT]"
 
-        # Step 1: search for IDs
         search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
         params = {
             "db": "pmc",
@@ -172,21 +302,23 @@ async def _search_pubmed(topic: str, limit: int, date_from: str = None) -> List[
             "retmode": "json",
             "sort": "pub+date",
         }
-        resp = requests.get(search_url, params=params, timeout=10)
-        resp.raise_for_status()
-        ids = resp.json().get("esearchresult", {}).get("idlist", [])
-        if not ids:
-            return []
 
-        await pubmed_limiter.wait()
+        # PERF-03: async httpx replaces blocking requests.get() (was blocking event loop)
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(search_url, params=params)
+            resp.raise_for_status()
+            ids = resp.json().get("esearchresult", {}).get("idlist", [])
+            if not ids:
+                return []
 
-        # Step 2: fetch summaries
-        summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
-        sum_params = {"db": "pmc", "id": ",".join(ids), "retmode": "json"}
-        sum_resp = requests.get(summary_url, params=sum_params, timeout=10)
-        sum_resp.raise_for_status()
+            await pubmed_limiter.wait()
+
+            summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+            sum_params = {"db": "pmc", "id": ",".join(ids), "retmode": "json"}
+            sum_resp = await client.get(summary_url, params=sum_params)
+            sum_resp.raise_for_status()
+
         summaries = sum_resp.json().get("result", {})
-
         results = []
         for uid in ids:
             s = summaries.get(uid, {})
@@ -214,7 +346,12 @@ async def _download_arxiv(paper_data: Dict) -> str:
     paper_id = paper_data["paper_id"]
     out_dir = Path(cfg.DOWNLOADS_DIR) / "arxiv"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = str(out_dir / f"{paper_id}.pdf")
+
+    # SEC-04: sanitize paper_id before filesystem use
+    _sfid = _safe_filename(paper_id)
+    _out_path_obj = out_dir / f"{_sfid}.pdf"
+    _assert_within_dir(_out_path_obj, out_dir)
+    out_path = str(_out_path_obj)
 
     if Path(out_path).exists():
         logger.info(f"[{paper_id}] PDF already cached.")
@@ -241,39 +378,50 @@ async def _download_arxiv(paper_data: Dict) -> str:
 
 
 async def _download_pubmed(paper_data: Dict) -> str:
-    """Download PubMed BioC JSON. Returns local file path."""
+    """
+    Download PubMed BioC JSON. Returns local file path.
+    LOG-01: Uses BioC JSON endpoint instead of efetch (which returns XML, not JSON).
+    """
     await pubmed_limiter.wait()
     paper_id = paper_data["paper_id"]
     pmc_id = paper_data.get("pmc_id", paper_id.replace("PMC", ""))
     out_dir = Path(cfg.DOWNLOADS_DIR) / "pubmed"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = str(out_dir / f"{paper_id}.json")
+
+    # SEC-04: sanitize paper_id before filesystem use
+    _sfid = _safe_filename(paper_id)
+    _out_path_obj = out_dir / f"{_sfid}.json"
+    _assert_within_dir(_out_path_obj, out_dir)
+    out_path = str(_out_path_obj)
 
     if Path(out_path).exists():
         return out_path
 
-    url = f"https://www.ncbi.nlm.nih.gov/research/bioxiv/PMID/{pmc_id}?format=json"
-    # BioC endpoint
-    bioc_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id=PMC{pmc_id}&format=json"
+    # LOG-01: BioC JSON endpoint — efetch returns XML and was never parseable as JSON
+    bioc_url = f"https://www.ncbi.nlm.nih.gov/research/bioxiv/PMC{pmc_id}?format=json"
 
     for attempt in range(1, cfg.MAX_RETRIES + 1):
         try:
-            resp = requests.get(
-                f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
-                params={"db": "pmc", "id": pmc_id, "rettype": "json", "retmode": "json"},
-                timeout=30,
-            )
-            # PubMed doesn't always return JSON — fall back to XML→text
-            if resp.status_code == 200 and resp.content:
-                with open(out_path, "wb") as f:
-                    f.write(resp.content)
-                return out_path
-            raise ValueError(f"Empty response from PubMed (status {resp.status_code})")
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                resp = await client.get(bioc_url)
+                resp.raise_for_status()
+            ct = resp.headers.get("content-type", "")
+            if "json" not in ct and not resp.text.strip().startswith("{"):
+                raise ValueError(
+                    f"BioC API returned non-JSON (Content-Type: {ct}). "
+                    f"PMC{pmc_id} may not be open-access."
+                )
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(resp.text)
+            logger.info(f"[{paper_id}] BioC JSON downloaded ({len(resp.content)//1024}KB)")
+            return out_path
         except Exception as exc:
             if attempt < cfg.MAX_RETRIES:
-                await asyncio.sleep(cfg.RETRY_BACKOFF_BASE ** (attempt - 1))
+                wait = cfg.RETRY_BACKOFF_BASE ** (attempt - 1)
+                logger.warning(f"[{paper_id}] PubMed attempt {attempt} failed: {exc}. Retry in {wait}s")
+                await asyncio.sleep(wait)
             else:
-                raise RuntimeError(f"PubMed download failed: {exc}")
+                raise RuntimeError(f"PubMed BioC download failed after {cfg.MAX_RETRIES} attempts: {exc}")
 
 
 async def _full_pipeline_task(paper_data: Dict, paper_id: str):
@@ -307,6 +455,7 @@ async def _full_pipeline_task(paper_data: Dict, paper_id: str):
             await db.set_stage(session, paper_id, "failed_download", str(exc))
             await db.log(session, paper_id, "download", "failed", str(exc))
         await push("download", "failed", str(exc))
+        _active_pipelines.discard(paper_id)  # LOG-02: release on failure
         _push_event(paper_id, "done", {"success": False, "error": str(exc)})
         return
 
@@ -320,7 +469,6 @@ async def _full_pipeline_task(paper_data: Dict, paper_id: str):
         extracted = await pipeline.process_paper_async(file_path, source, paper_id)
         duration = round(time.time() - t0, 2)
 
-        # Persist sections + chunks to PostgreSQL
         sections_data = [
             {
                 "section_type": s.section_type,
@@ -345,7 +493,6 @@ async def _full_pipeline_task(paper_data: Dict, paper_id: str):
 
         async with db.session() as session:
             paper = await db.get_paper(session, paper_id)
-            # Update title/abstract from extraction if not already set
             updates = {}
             if not paper.title and extracted.title:
                 updates["title"] = extracted.title
@@ -373,6 +520,7 @@ async def _full_pipeline_task(paper_data: Dict, paper_id: str):
             await db.set_stage(session, paper_id, "failed_processing", str(exc))
             await db.log(session, paper_id, "processing", "failed", str(exc))
         await push("processing", "failed", str(exc))
+        _active_pipelines.discard(paper_id)  # LOG-02: release on failure
         _push_event(paper_id, "done", {"success": False, "error": str(exc)})
         return
 
@@ -386,6 +534,7 @@ async def _full_pipeline_task(paper_data: Dict, paper_id: str):
     except Exception as exc:
         logger.warning(f"[{paper_id}] Chat session creation failed: {exc}")
 
+    _active_pipelines.discard(paper_id)  # LOG-02: release on success
     _push_event(paper_id, "done", {
         "success": True,
         "paper_id": paper_id,
@@ -394,11 +543,13 @@ async def _full_pipeline_task(paper_data: Dict, paper_id: str):
     })
 
 
-@app.post("/api/papers/search")
-async def search_papers(req: SearchRequest, background_tasks: BackgroundTasks):
+@app.post("/api/papers/search", dependencies=[Depends(_auth)])
+@_limiter.limit("5/minute")
+async def search_papers(request: Request, req: SearchRequest, background_tasks: BackgroundTasks):
     """
     Search for papers and immediately begin download + processing pipeline.
-    Returns paper list; use SSE /api/papers/{paper_id}/progress to track.
+    SEC-03: 5 requests/minute per IP.
+    SEC-05: requires X-API-Key if API_SECRET_KEY is configured.
     """
     results = []
 
@@ -413,7 +564,6 @@ async def search_papers(req: SearchRequest, background_tasks: BackgroundTasks):
     if not results:
         return {"papers": [], "message": "No papers found. Try a different topic or source."}
 
-    # Persist to DB and kick off pipelines
     queued = []
     for paper_data in results:
         pid = paper_data["paper_id"]
@@ -421,9 +571,12 @@ async def search_papers(req: SearchRequest, background_tasks: BackgroundTasks):
 
         async with db.session() as session:
             existing = await db.get_paper(session, pid)
-            if existing and existing.pipeline_stage == "processed":
-                paper_data["pipeline_stage"] = "processed"
-                queued.append({**paper_data, "pipeline_stage": "processed", "cached": True})
+            # LOG-02: skip if already active or in any non-failed stage
+            _ACTIVE_STAGES = {"processed", "downloading", "downloaded", "processing"}
+            if pid in _active_pipelines or (existing and existing.pipeline_stage in _ACTIVE_STAGES):
+                stage = existing.pipeline_stage if existing else "active"
+                paper_data["pipeline_stage"] = stage
+                queued.append({**paper_data, "pipeline_stage": stage, "cached": True})
                 continue
             await db.upsert_paper(session, {
                 "paper_id": pid,
@@ -437,9 +590,15 @@ async def search_papers(req: SearchRequest, background_tasks: BackgroundTasks):
                                                 "authors", "abstract", "url")},
             })
 
-        # Create SSE queue for this paper
         _sse_queues[pid] = asyncio.Queue(maxsize=50)
-        background_tasks.add_task(_full_pipeline_task, paper_data, pid)
+        _active_pipelines.add(pid)  # LOG-02: register before spawning
+
+        # SEC-03: pipeline task guarded by concurrency semaphore
+        async def _guarded_pipeline(pd, p_id):
+            async with _pipeline_sem:
+                await _full_pipeline_task(pd, p_id)
+
+        background_tasks.add_task(_guarded_pipeline, paper_data, pid)
         queued.append({**paper_data, "pipeline_stage": "pending"})
 
     return {"papers": queued, "count": len(queued), "topic": req.topic}
@@ -449,11 +608,9 @@ async def search_papers(req: SearchRequest, background_tasks: BackgroundTasks):
 async def paper_progress(paper_id: str):
     """
     Server-Sent Events stream for pipeline progress.
-    Frontend: const es = new EventSource('/api/papers/{paper_id}/progress')
-    Events: progress, done
+    LOG-08: try/finally guarantees queue cleanup even when client disconnects early.
     """
     if paper_id not in _sse_queues:
-        # Check if paper already processed
         async with db.session() as session:
             paper = await db.get_paper(session, paper_id)
         if paper and paper.pipeline_stage == "processed":
@@ -465,16 +622,19 @@ async def paper_progress(paper_id: str):
     q = _sse_queues[paper_id]
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        while True:
-            try:
-                item = await asyncio.wait_for(q.get(), timeout=30.0)
-                data_str = json.dumps(item["data"])
-                yield f"event: {item['event']}\ndata: {data_str}\n\n"
-                if item["event"] == "done":
-                    _sse_queues.pop(paper_id, None)
-                    break
-            except asyncio.TimeoutError:
-                yield "event: heartbeat\ndata: {}\n\n"
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(q.get(), timeout=30.0)
+                    data_str = json.dumps(item["data"])
+                    yield f"event: {item['event']}\ndata: {data_str}\n\n"
+                    if item["event"] == "done":
+                        break
+                except asyncio.TimeoutError:
+                    yield "event: heartbeat\ndata: {}\n\n"
+        finally:
+            # LOG-08: always cleanup — handles client disconnect AND normal exit
+            _sse_queues.pop(paper_id, None)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -511,15 +671,28 @@ async def list_papers(
 
 @app.delete("/api/papers/{paper_id}")
 async def delete_paper(paper_id: str):
+    """
+    LOG-05: ChromaDB deleted FIRST. If it fails, abort and return 500 so the
+    PostgreSQL record is preserved — prevents permanently orphaned vectors.
+    """
     async with db.session() as session:
         paper = await db.get_paper(session, paper_id)
-        if not paper:
-            raise HTTPException(404, "Paper not found.")
-        deleted = await db.delete_paper(session, paper_id)
+    if not paper:
+        raise HTTPException(404, "Paper not found.")
+
+    # Step 1: ChromaDB first — if it fails we abort before touching PostgreSQL
     try:
         vector_store.delete_paper(paper_id)
     except Exception as e:
-        logger.warning(f"ChromaDB delete failed for {paper_id}: {e}")
+        logger.error(f"ChromaDB delete failed for {paper_id}: {e}")
+        raise HTTPException(
+            500,
+            f"Vector cleanup failed — delete aborted to prevent orphaned vectors: {e}"
+        )
+
+    # Step 2: PostgreSQL — only reaches here if ChromaDB succeeded
+    async with db.session() as session:
+        deleted = await db.delete_paper(session, paper_id)
     return {"deleted": deleted, "paper_id": paper_id}
 
 
@@ -529,7 +702,7 @@ async def delete_paper(paper_id: str):
 
 class MessageRequest(BaseModel):
     message: str
-    level: Optional[str] = None   # if provided, updates session level
+    level: Optional[str] = None
 
     @validator("message")
     def msg_not_empty(cls, v):
@@ -541,9 +714,9 @@ class MessageRequest(BaseModel):
         return v
 
 
-@app.get("/api/chat/sessions")
+@app.get("/api/chat/sessions", dependencies=[Depends(_auth)])
 async def list_sessions():
-    """Return all chat sessions for the sidebar."""
+    """Return all chat sessions for the sidebar. SEC-05: protected endpoint."""
     async with db.session() as session:
         sessions = await db.list_sessions(session)
     return {
@@ -562,9 +735,9 @@ async def list_sessions():
     }
 
 
-@app.get("/api/chat/sessions/{session_id}")
+@app.get("/api/chat/sessions/{session_id}", dependencies=[Depends(_auth)])
 async def get_session(session_id: str):
-    """Return session info + full message history."""
+    """Return session info + full message history. SEC-05: protected endpoint."""
     async with db.session() as session:
         sess = await db.get_session(session, session_id)
         if not sess:
@@ -591,10 +764,12 @@ async def get_session(session_id: str):
 
 
 @app.post("/api/chat/sessions/{session_id}/message")
-async def send_message(session_id: str, req: MessageRequest):
+@_limiter.limit("30/minute")
+async def send_message(request: Request, session_id: str, req: MessageRequest):
     """
     Send a message and get a teaching response from Gemini.
-    Full conversation history is passed for contextual memory.
+    SEC-03: 30 requests/minute per IP.
+    LOG-04: ChromaDB failure returns 503 instead of silently hallucinating.
     """
     async with db.session() as session:
         sess = await db.get_session(session, session_id)
@@ -609,12 +784,11 @@ async def send_message(session_id: str, req: MessageRequest):
 
         messages = await db.get_messages(session, session_id)
 
-        # Update level if requested
         effective_level = req.level or sess.level
         if req.level and req.level != sess.level:
             await db.update_session_level(session, session_id, req.level)
 
-    # Get paper context from ChromaDB (most relevant chunks for this message)
+    # LOG-04: raise 503 on ChromaDB failure — never silently hallucinate
     try:
         context_results = vector_store.query(
             query_text=req.message,
@@ -624,17 +798,20 @@ async def send_message(session_id: str, req: MessageRequest):
         paper_context = "\n\n".join(r["content"] for r in context_results)
         if not paper_context:
             paper_context = vector_store.get_paper_context(paper.paper_id)
-    except Exception:
-        paper_context = f"{paper.title}\n\n{paper.abstract or ''}"
+    except Exception as ctx_exc:
+        logger.error(f"ChromaDB query failed for session {session_id}: {ctx_exc}")
+        raise HTTPException(
+            503,
+            "Paper context retrieval temporarily unavailable. Please try again."
+        )
 
-    # Build history list
     history = [{"role": m.role, "content": m.content} for m in messages]
 
-    # Call Gemini
     try:
         gemini = get_gemini()
         authors_str = ", ".join(paper.authors or []) or "Unknown authors"
-        response_text = gemini.chat_response(
+        # LOG-10: chat_response is now async — must await
+        response_text = await gemini.chat_response(
             paper_context=paper_context,
             paper_title=paper.title or paper.paper_id,
             paper_authors=authors_str,
@@ -644,9 +821,8 @@ async def send_message(session_id: str, req: MessageRequest):
         )
     except Exception as exc:
         logger.error(f"Gemini chat failed: {exc}")
-        raise HTTPException(503, f"AI response failed: {exc}")
+        raise HTTPException(503, "AI response failed. Please try again.")
 
-    # Persist both messages
     async with db.session() as session:
         await db.add_message(session, session_id, "user", req.message, effective_level)
         await db.add_message(session, session_id, "assistant", response_text, effective_level)
@@ -665,8 +841,8 @@ async def send_message(session_id: str, req: MessageRequest):
 
 class GenerateRequest(BaseModel):
     paper_id: str
-    platform: str                   # twitter | linkedin | carousel
-    content_style: str = "educational"  # professional | minimal | bold | educational
+    platform: str
+    content_style: str = "educational"
     carousel_style: Optional[Dict[str, Any]] = None
 
     @validator("platform")
@@ -677,10 +853,12 @@ class GenerateRequest(BaseModel):
 
 
 @app.post("/api/generate")
-async def generate_content(req: GenerateRequest, background_tasks: BackgroundTasks):
+@_limiter.limit("3/minute")
+async def generate_content(request: Request, req: GenerateRequest, background_tasks: BackgroundTasks):
     """
     Generate social content for a processed paper.
-    Returns immediately; SSE /api/generate/{paper_id}/progress streams updates.
+    SEC-03: 3 requests/minute per IP.
+    ARCH-02: returns 503 if Playwright not available and carousel requested.
     """
     async with db.session() as session:
         paper = await db.get_paper(session, req.paper_id)
@@ -689,6 +867,10 @@ async def generate_content(req: GenerateRequest, background_tasks: BackgroundTas
         if paper.pipeline_stage != "processed":
             raise HTTPException(400, "Paper must be fully processed before generating content.")
         sections = await db.get_sections(session, req.paper_id)
+
+    # ARCH-02: guard carousel if Playwright is unavailable
+    if req.platform == "carousel" and not _playwright_ok:
+        raise HTTPException(503, "Carousel rendering unavailable. Run: playwright install chromium")
 
     gen_id = str(uuid.uuid4())[:8]
     key = f"gen_{req.paper_id}_{req.platform}"
@@ -713,7 +895,6 @@ async def _generate_task(paper, sections, platform, style, carousel_style, queue
     push("started", {"message": f"Generating {platform} content…"})
 
     try:
-        # Build context
         priority = ["abstract", "conclusion", "results", "discussion", "introduction"]
         snippets = []
         for ptype in priority:
@@ -726,7 +907,8 @@ async def _generate_task(paper, sections, platform, style, carousel_style, queue
         gemini = get_gemini()
 
         if platform == "twitter":
-            result = gemini.generate_twitter_thread(
+            # LOG-10: async gemini methods — must await
+            result = await gemini.generate_twitter_thread(
                 paper.title or "", authors_str,
                 paper.abstract or "", key_content,
             )
@@ -734,7 +916,7 @@ async def _generate_task(paper, sections, platform, style, carousel_style, queue
             hashtags = result.get("hashtags", [])
 
         elif platform == "linkedin":
-            result = gemini.generate_linkedin_post(
+            result = await gemini.generate_linkedin_post(
                 paper.title or "", authors_str,
                 paper.abstract or "", key_content,
             )
@@ -742,12 +924,10 @@ async def _generate_task(paper, sections, platform, style, carousel_style, queue
             hashtags = result.get("hashtags", [])
 
         elif platform == "carousel":
-            # Generate content via Gemini
-            result = gemini.generate_carousel_content(
+            result = await gemini.generate_carousel_content(
                 paper.title or "", authors_str,
                 paper.abstract or "", key_content,
             )
-            # Render slides (Playwright)
             from carousel_renderer import render_carousel
             style_obj = carousel_style or {}
             pdf_path, png_paths = await render_carousel(
@@ -760,7 +940,6 @@ async def _generate_task(paper, sections, platform, style, carousel_style, queue
             content_str = json.dumps(result)
             hashtags = result.get("hashtags", [])
 
-        # Persist to DB
         async with db.session() as session:
             saved = await db.save_social(
                 session, paper.paper_id, platform,
@@ -778,7 +957,6 @@ async def _generate_task(paper, sections, platform, style, carousel_style, queue
         logger.error(f"Generate task failed: {exc}")
         push("failed", {"error": str(exc)})
     finally:
-        # Signal stream end
         q = _sse_queues.get(queue_key)
         if q:
             q.put_nowait({"event": "done", "data": {}})
@@ -786,22 +964,28 @@ async def _generate_task(paper, sections, platform, style, carousel_style, queue
 
 @app.get("/api/generate/{queue_key}/progress")
 async def generate_progress(queue_key: str):
-    """SSE stream for content generation progress."""
+    """
+    SSE stream for content generation progress.
+    LOG-08: try/finally guarantees queue cleanup on client disconnect.
+    """
     if queue_key not in _sse_queues:
         raise HTTPException(404, "No active generation for this key.")
 
     q = _sse_queues[queue_key]
 
     async def stream():
-        while True:
-            try:
-                item = await asyncio.wait_for(q.get(), timeout=60.0)
-                yield f"event: {item['event']}\ndata: {json.dumps(item['data'])}\n\n"
-                if item["event"] == "done":
-                    _sse_queues.pop(queue_key, None)
-                    break
-            except asyncio.TimeoutError:
-                yield "event: heartbeat\ndata: {}\n\n"
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(q.get(), timeout=60.0)
+                    yield f"event: {item['event']}\ndata: {json.dumps(item['data'])}\n\n"
+                    if item["event"] == "done":
+                        break
+                except asyncio.TimeoutError:
+                    yield "event: heartbeat\ndata: {}\n\n"
+        finally:
+            # LOG-08: guaranteed cleanup — handles disconnect AND normal exit
+            _sse_queues.pop(queue_key, None)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
@@ -864,4 +1048,8 @@ async def query_papers(req: QueryRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "3.0.0"}
+    return {
+        "status": "ok",
+        "version": "3.0.0",
+        "playwright": _playwright_ok,
+    }

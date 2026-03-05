@@ -1,11 +1,11 @@
 """
 carousel_renderer.py — Renders carousel slides as PNG + PDF.
-Uses Playwright (free, open source) with parallel slide rendering.
-Includes local font fallback so slides work offline.
 
-Install:
-    pip install playwright reportlab pillow
-    playwright install chromium
+Fixes applied:
+  SEC-07: _esc() now uses html.escape(quote=True) — full HTML escaping including
+          single/double quotes, prevents XSS in Playwright-rendered HTML attributes.
+  PERF-04: asyncio.Semaphore(3) caps concurrent Playwright pages to prevent OOM.
+           finally block in render_one() guarantees page.close() even on error.
 """
 
 import asyncio
@@ -26,7 +26,6 @@ SLIDE_W = 1080
 SLIDE_H = 1080
 
 # ── Emerald palette presets ──────────────────────────────────────────────────
-# Brilliant's Emerald color palette as required
 
 EMERALD_PRESETS = {
     "emerald_dark": {
@@ -77,7 +76,6 @@ FONT_FAMILIES = {
     "mono":     "'DM Mono', 'Courier New', monospace",
 }
 
-# Local fallback fonts (no network needed)
 FONT_FALLBACKS = {
     "playfair": "Georgia, 'Times New Roman', serif",
     "lora":     "Georgia, 'Times New Roman', serif",
@@ -86,8 +84,12 @@ FONT_FALLBACKS = {
 }
 
 
+# SEC-07: Full HTML escaping including quotes — prevents XSS in Playwright HTML.
+# Old: only escaped &, <, > — missed quotes, broke out of HTML attributes.
 def _esc(text: str) -> str:
-    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    """Full HTML escaping including single and double quotes (XSS-safe)."""
+    import html as _html
+    return _html.escape(str(text or ""), quote=True)
 
 
 def _hex_rgba(hex_color: str, alpha: float) -> str:
@@ -98,10 +100,10 @@ def _hex_rgba(hex_color: str, alpha: float) -> str:
 
 def build_slide_html(slide: Dict, style: Dict, slide_num: int, total: int) -> str:
     """Generate self-contained HTML for one slide."""
-    font_key   = style.get("font", "playfair")
-    font_url   = FONT_IMPORTS.get(font_key, FONT_IMPORTS["playfair"])
-    font_fam   = FONT_FAMILIES.get(font_key, FONT_FAMILIES["playfair"])
-    font_fall  = FONT_FALLBACKS.get(font_key, "Georgia, serif")
+    font_key  = style.get("font", "playfair")
+    font_url  = FONT_IMPORTS.get(font_key, FONT_IMPORTS["playfair"])
+    font_fam  = FONT_FAMILIES.get(font_key, FONT_FAMILIES["playfair"])
+    font_fall = FONT_FALLBACKS.get(font_key, "Georgia, serif")
 
     bg     = style.get("bg_color", "#0A1628")
     accent = style.get("accent_color", "#00C896")
@@ -114,18 +116,17 @@ def build_slide_html(slide: Dict, style: Dict, slide_num: int, total: int) -> st
     ad = _hex_rgba(accent, 0.15)
     am = _hex_rgba(accent, 0.35)
 
-    stype = slide.get("slide_type", "finding")
-    title = slide.get("title", "")
-    subtitle = slide.get("subtitle", "")
-    bullets = slide.get("bullets", [])
-    stat = slide.get("stat", "")
+    stype     = slide.get("slide_type", "finding")
+    title     = slide.get("title", "")
+    subtitle  = slide.get("subtitle", "")
+    bullets   = slide.get("bullets", [])
+    stat      = slide.get("stat", "")
     stat_label = slide.get("stat_label", "")
-    quote = slide.get("quote", "")
+    quote     = slide.get("quote", "")
 
-    # Build content HTML per slide type
     if stype == "cover":
         content = f"""
-        <div class="cover-badge">◎ Research Paper</div>
+        <div class="cover-badge">&#9675; Research Paper</div>
         <div class="title-xl">{_esc(title)}</div>
         <div class="rule"></div>
         <div class="subtitle">{_esc(subtitle)}</div>
@@ -147,14 +148,14 @@ def build_slide_html(slide: Dict, style: Dict, slide_num: int, total: int) -> st
         <div class="label">{_esc(title)}</div>
         <div class="spacer"></div>
         <div class="quote-block">
-            <div class="qmark">"</div>
+            <div class="qmark">&ldquo;</div>
             <div class="qtext">{_esc(quote)}</div>
         </div>
         <div class="spacer"></div>
         """
     elif stype == "cta":
         bullets_html = "".join(
-            f'<div class="cta-item">→ {_esc(b)}</div>' for b in bullets
+            f'<div class="cta-item">&#8594; {_esc(b)}</div>' for b in bullets
         )
         content = f"""
         <div class="label">Take Away</div>
@@ -163,20 +164,17 @@ def build_slide_html(slide: Dict, style: Dict, slide_num: int, total: int) -> st
         <div class="cta-list">{bullets_html}</div>
         """
     else:
-        # finding / method / default
         bullets_html = "".join(
-            f'<div class="bullet"><span class="bdot">◎</span><span>{_esc(b)}</span></div>'
+            f'<div class="bullet"><span class="bdot">&#9675;</span><span>{_esc(b)}</span></div>'
             for b in bullets
         )
         content = f"""
-        <div class="label">{_esc(stype.replace("_"," ").title())}</div>
+        <div class="label">{_esc(stype.replace("_", " ").title())}</div>
         <div class="title">{_esc(title)}</div>
         <div class="rule"></div>
         <div class="bullets">{bullets_html}</div>
         """
 
-    # Shape CSS
-    shape_css = ""
     if shape == "circle":
         shape_css = f"""
         .shape1 {{
@@ -275,7 +273,7 @@ body {{
     {content}
     <div class="footer">
         <span class="footer-brand">{_esc(footer)}</span>
-        <span style="opacity:.4"> · </span>
+        <span style="opacity:.4"> &middot; </span>
         <span>{slide_num}/{total}</span>
     </div>
 </div>
@@ -289,8 +287,11 @@ async def render_carousel(
     style: Optional[Dict] = None,
 ) -> Tuple[str, List[str]]:
     """
-    Render slides to PNG in parallel, then assemble into PDF.
-    Returns (pdf_path, [png_path, ...])
+    Render slides to PNG, then assemble into PDF.
+
+    PERF-04: asyncio.Semaphore(3) limits peak concurrent Playwright pages to 3,
+             preventing OOM on large carousels (~75MB per page).
+             finally block in render_one() guarantees page.close() on any exit path.
     """
     if not slides:
         raise ValueError("No slides to render.")
@@ -309,27 +310,31 @@ async def render_carousel(
             "Run: pip install playwright && playwright install chromium"
         )
 
-    # Render all slides in parallel
     async with async_playwright() as pw:
         browser = await pw.chromium.launch()
 
+        # PERF-04: max 3 concurrent browser pages — prevents OOM on large carousels
+        _page_sem = asyncio.Semaphore(3)
+
         async def render_one(slide: Dict, idx: int) -> str:
-            html = build_slide_html(slide, merged_style, idx, total)
-            page = await browser.new_page(viewport={"width": SLIDE_W, "height": SLIDE_H})
-            await page.set_content(html, wait_until="networkidle")
-            await asyncio.sleep(0.6)  # Let fonts load
-            fname = str(out_dir / f"slide_{idx:02d}.png")
-            await page.screenshot(path=fname, full_page=False)
-            await page.close()
-            return fname
+            async with _page_sem:
+                page = await browser.new_page(viewport={"width": SLIDE_W, "height": SLIDE_H})
+                try:
+                    html = build_slide_html(slide, merged_style, idx, total)
+                    await page.set_content(html, wait_until="networkidle")
+                    await asyncio.sleep(0.6)  # let fonts load
+                    fname = str(out_dir / f"slide_{idx:02d}.png")
+                    await page.screenshot(path=fname, full_page=False)
+                    return fname
+                finally:
+                    await page.close()  # guaranteed cleanup even on error
 
         tasks = [render_one(slide, i + 1) for i, slide in enumerate(slides)]
         png_paths = await asyncio.gather(*tasks)
         await browser.close()
 
-    logger.info(f"[{paper_id}] Rendered {len(png_paths)} slides in parallel.")
+    logger.info(f"[{paper_id}] Rendered {len(png_paths)} slides.")
 
-    # Assemble PDF
     pdf_path = str(out_dir / f"{paper_id}_carousel.pdf")
     from reportlab.lib.pagesizes import landscape
     c = rl_canvas.Canvas(pdf_path, pagesize=landscape((SLIDE_W, SLIDE_H)))
