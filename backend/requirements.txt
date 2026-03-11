@@ -18,7 +18,7 @@ arxiv==2.1.3
 requests==2.32.3
 
 # ── PDF processing ────────────────────────────────────────────
-pymupdf==1.24.4       # fitz — fast PDF text extraction
+pymupdf>=1.24.9       # fitz — fast PDF text extraction
 ftfy==6.2.0           # Unicode/encoding fixes
 
 # ── NLP / Embeddings ─────────────────────────────────────────
@@ -28,7 +28,7 @@ sentence-transformers==3.0.1
 chromadb==0.5.3
 
 # ── LLM — Google AI Studio (free tier) ───────────────────────
-google-generativeai>=1.0.0
+google-generativeai==0.8.6
 
 # ── Carousel rendering ────────────────────────────────────────
 playwright==1.45.0
