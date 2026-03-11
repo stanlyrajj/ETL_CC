@@ -6,12 +6,19 @@ Fixes applied:
            instantiation and see the change in Config().FIELD.
   SEC-05:  API_SECRET_KEY field added — enables optional API key auth in dev/prod.
   PERF-01: MAX_EMBEDDING_BATCH_SIZE field added — caps per-batch embedding size.
+  FIX:     load_dotenv() added — .env file in backend/ is now loaded automatically.
 """
 
 import os
 import sys
 import logging
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load backend/.env before Config() reads any os.getenv().
+# override=False means real environment variables (e.g. from a shell export) still win.
+load_dotenv(Path(__file__).parent / ".env", override=False)
 
 logger = logging.getLogger(__name__)
 
