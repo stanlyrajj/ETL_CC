@@ -170,7 +170,7 @@ async def _recover_orphaned_pipelines() -> None:
     recovered = 0
     for stage in orphan_stages:
         async with db.session() as sess:
-            orphans = await db.list_papers_by_stage(sess, stage=stage, limit=200)
+            orphans = await db.list_papers(sess, stage=stage, limit=200)
         for paper in orphans:
             logger.warning(f"[recovery] {paper.paper_id} stuck at '{stage}' — resetting to pending")
             async with db.session() as sess:
