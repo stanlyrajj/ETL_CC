@@ -1,12 +1,6 @@
 """
 config.py — Central configuration with startup validation.
-
-Fixes applied:
-  ARCH-03: All os.getenv() calls moved into __init__ — tests can patch os.environ before
-           instantiation and see the change in Config().FIELD.
-  SEC-05:  API_SECRET_KEY field added — enables optional API key auth in dev/prod.
-  PERF-01: MAX_EMBEDDING_BATCH_SIZE field added — caps per-batch embedding size.
-  FIX:     load_dotenv() added — .env file in backend/ is now loaded automatically.
+Reads from environment variables (with defaults) and validates critical settings at startup.
 """
 
 import os

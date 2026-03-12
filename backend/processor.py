@@ -1,13 +1,5 @@
 """
 processor.py — Paper extraction, chunking, embedding, and vector storage.
-
-Fixes applied:
-  LOG-09: VectorStore accepts injected EmbeddingGenerator — no per-query model reload.
-          Module-level vector_store = pipeline.vector_store (single shared instance).
-  PERF-01: generate_for_chunks() processes in batches of cfg.MAX_EMBEDDING_BATCH_SIZE
-           to prevent OOM on large papers (500+ chunks).
-  PERF-02: with_retry() immediately re-raises PERMANENT_ERRORS (ValueError,
-           JSONDecodeError, UnicodeDecodeError) without sleeping — wasted retries eliminated.
 """
 
 import asyncio

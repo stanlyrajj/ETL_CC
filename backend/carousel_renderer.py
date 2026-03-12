@@ -1,11 +1,6 @@
 """
 carousel_renderer.py — Renders carousel slides as PNG + PDF.
 
-Fixes applied:
-  SEC-07: _esc() now uses html.escape(quote=True) — full HTML escaping including
-          single/double quotes, prevents XSS in Playwright-rendered HTML attributes.
-  PERF-04: asyncio.Semaphore(3) caps concurrent Playwright pages to prevent OOM.
-           finally block in render_one() guarantees page.close() even on error.
 """
 
 import asyncio

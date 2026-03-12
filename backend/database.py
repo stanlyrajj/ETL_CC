@@ -2,11 +2,6 @@
 database.py — PostgreSQL async models + CRUD helpers.
 All tables in one place. Import `db` singleton everywhere.
 
-New vs previous version:
-  - chat_sessions table (multi-session sidebar)
-  - chat_messages table (per-message history with role)
-  - Papers.processing_stage (fine-grained pipeline state)
-  - Startup health check
 """
 
 import logging

@@ -1,28 +1,6 @@
 """
 app.py — Single unified FastAPI application.
 
-Fixes applied (in batch order):
-  Batch 1 — CRITICAL:
-    SEC-01: Prompt injection — paper context sanitized + XML-delimited in gemini_client.py
-    SEC-03: Per-IP rate limiting via slowapi (search=5/min, chat=30/min, generate=3/min)
-            + asyncio.Semaphore(5) caps concurrent pipeline tasks
-    LOG-01: PubMed download switched from efetch (returns XML) to BioC JSON endpoint
-    LOG-02: Idempotency guard expanded to all active stages + _active_pipelines set
-    LOG-03: Orphaned pipeline recovery on startup (_recover_orphaned_pipelines)
-    LOG-04: ChromaDB failure returns 503 instead of silently hallucinating
-  Batch 2 — HIGH:
-    SEC-02: Log filter redacts GEMINI_API_KEY from all log records
-    SEC-04: _safe_filename() + _assert_within_dir() prevent path traversal
-    LOG-05: delete_paper() — ChromaDB deleted before PostgreSQL (no orphaned vectors)
-    LOG-06: RateLimiter uses asyncio.Lock (concurrency-safe, no TOCTOU race)
-    SEC-05: Optional X-API-Key authentication via _auth dependency
-  Batch 3 — HIGH:
-    LOG-08: SSE generators wrapped in try/finally — queues always cleaned on disconnect
-    LOG-10: gemini calls are all awaited (async in gemini_client.py)
-    PERF-03: _search_pubmed() uses async httpx instead of blocking requests.get()
-  Batch 4 — MEDIUM:
-    PERF-05: arxiv.Search iterator runs in thread pool executor (sync HTTP, blocks loop)
-    ARCH-02: Playwright startup check; carousel returns 503 if Chromium missing
 """
 
 import asyncio

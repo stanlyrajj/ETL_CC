@@ -1,13 +1,6 @@
 """
 gemini_client.py — Google Gemini API wrapper (free tier via Google AI Studio).
 
-Fixes applied:
-  SEC-01: Prompt injection hardening — _sanitize_context() strips injection patterns;
-          paper context wrapped in <paper_content> XML delimiters; hardened system prompt.
-  SEC-02: API key never included in RuntimeError messages (only in server logs, redacted).
-  LOG-10: _call() is now async — uses run_in_executor for the blocking SDK call,
-          await asyncio.sleep() for non-blocking retry backoff.
-          All public methods are now async (chat_response, generate_*).
 """
 
 import asyncio
