@@ -1,5 +1,5 @@
 """
-carousel_renderer.py — Renders carousel slides as PNG + PDF.
+carousel_renderer.py — Renders carousel slides as PNG + PDF
 
 """
 

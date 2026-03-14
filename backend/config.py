@@ -1,6 +1,6 @@
 """
 config.py — Central configuration with startup validation.
-Reads from environment variables (with defaults) and validates critical settings at startup.
+Reads from environment variables (with defaults) and validates critical settings at startup, exiting with an error message if something is missing or clearly misconfigured. Also creates necessary directories if they don't exist.
 """
 
 import os

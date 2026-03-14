@@ -1,5 +1,6 @@
 """
-processor.py — Paper extraction, chunking, embedding, and vector storage.
+processor.py — Paper extraction, chunking, embedding, and vector storage pipeline.
+Defines the full processing pipeline for research papers:
 """
 
 import asyncio

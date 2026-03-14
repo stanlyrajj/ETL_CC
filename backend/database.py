@@ -1,6 +1,6 @@
 """
 database.py — PostgreSQL async models + CRUD helpers.
-All tables in one place. Import `db` singleton everywhere.
+All tables in one place. Import `db` singleton everywhere else to interact with the database asynchronously.
 
 """
 

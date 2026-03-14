@@ -1,5 +1,5 @@
 """
-app.py — Single unified FastAPI application.
+app.py — Single unified FastAPI application
 
 """
 

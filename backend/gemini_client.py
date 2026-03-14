@@ -1,5 +1,6 @@
 """
-gemini_client.py — Google Gemini API wrapper (free tier via Google AI Studio).
+gemini_client.py — Google Gemini API wrapper (free tier via Google AI Studio with API key).
+Provides async methods for generating teaching chat responses and social media content.
 
 """
 
