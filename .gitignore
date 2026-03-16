@@ -1,0 +1,42 @@
+# Environment
+.env
+.env.local
+.env.*.local
+.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+my_env/
+*.egg-info/
+
+# Database
+*.db
+*.sqlite
+researchrag.db
+
+# Generated data
+chroma_db/
+downloads/
+carousel_outputs/
+
+# Node
+node_modules/
+next-env.d.ts
+.next/
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
