@@ -29,6 +29,7 @@ node_modules/
 next-env.d.ts
 .next/
 out/
+package-lock.json
 
 # OS
 .DS_Store
