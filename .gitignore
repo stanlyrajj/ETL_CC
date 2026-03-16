@@ -17,6 +17,7 @@ my_env/
 *.db
 *.sqlite
 researchrag.db
+downloads/
 
 # Generated data
 chroma_db/
