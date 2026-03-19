@@ -42,3 +42,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+#Additional files to ignore
+*.bak
