@@ -106,20 +106,29 @@ async def _run_pipeline(doc: DocumentInput) -> None:
         t0 = time.monotonic()
 
         if doc.source in ("arxiv", "pubmed") and not doc.file_path:
-            # Fetch the PDF from the URL in extra_metadata
-            pdf_url = doc.extra_metadata.get("pdf_url") or doc.url
-            if not pdf_url or not pdf_url.endswith(".pdf"):
-                # For PubMed, no direct PDF — mark downloaded with no file
+            # Fetch the PDF from the URL in extra_metadata.
+            # FIX: arXiv PDF URLs look like https://arxiv.org/pdf/2301.07041v1 —
+            # they do NOT end in ".pdf". The previous check `pdf_url.endswith(".pdf")`
+            # was always False for arXiv, causing every arXiv paper to be treated as
+            # abstract-only (file_path="") and skip extraction entirely.
+            # Correct check: any non-empty pdf_url is a valid download target.
+            pdf_url = doc.extra_metadata.get("pdf_url", "").strip()
+            if not pdf_url:
+                # No PDF URL available (PubMed abstract-only path)
                 file_path = ""
             else:
                 dest_dir = Path(cfg.DOWNLOADS_DIR) / doc.source
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 dest_path = dest_dir / f"{doc.paper_id}.pdf"
-                async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
-                    response = await client.get(pdf_url)
-                    response.raise_for_status()
-                    dest_path.write_bytes(response.content)
-                file_path = str(dest_path)
+                try:
+                    async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+                        response = await client.get(pdf_url)
+                        response.raise_for_status()
+                        dest_path.write_bytes(response.content)
+                    file_path = str(dest_path)
+                except httpx.HTTPStatusError as exc:
+                    await _fail("failed_download", f"HTTP {exc.response.status_code} downloading PDF: {pdf_url}")
+                    return
 
             async with db.session() as sess:
                 await db.upsert_paper(sess, {

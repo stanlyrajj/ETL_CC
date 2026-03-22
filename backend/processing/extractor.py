@@ -3,6 +3,17 @@ extractor.py — Extracts text and structure from documents using Docling.
 
 Supports PDF files and PubMed BioC JSON files.
 Docling is synchronous, so extraction runs in run_in_executor.
+
+Three-pass PDF strategy:
+  Pass 1 (fast):    Docling with do_ocr=False — reads the text layer directly.
+                    Governed by DOCLING_FAST_TIMEOUT seconds (default 60).
+                    Accepted if it completes in time AND yields >= 200 chars.
+  Pass 2 (PyMuPDF): Triggered when Pass 1 times out OR yields < 200 chars.
+                    Extracts raw text from the PDF text layer in < 1 second.
+                    Accepted if it yields >= 200 chars.
+  Pass 3 (OCR):     Triggered only when both Pass 1 and Pass 2 fail to yield
+                    enough content — indicates a scanned/image-only PDF.
+                    Runs Docling with do_ocr=True. May take minutes on CPU.
 """
 
 import asyncio
@@ -11,11 +22,13 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from config import cfg
 from ingestion.validator import DocumentInput
 
 logger = logging.getLogger(__name__)
 
-_MIN_CONTENT_CHARS = 100
+_MIN_CONTENT_CHARS      = 100   # minimum to consider extraction successful
+_OCR_FALLBACK_THRESHOLD = 200   # passes yielding fewer chars trigger next fallback
 
 
 # ── Output types ──────────────────────────────────────────────────────────────
@@ -56,20 +69,11 @@ def _label_to_section_type(label_str: str) -> str:
     return "body"
 
 
-def _extract_pdf_sync(file_path: str) -> list[Section]:
+def _sections_from_docling_doc(doc) -> list[Section]:
     """
-    Run Docling on a PDF file and return a list of Sections.
-    This is blocking — call it inside run_in_executor.
-
-    Supports Docling v2. Tries structured item iteration first,
-    falls back to full-document markdown export if that yields nothing.
+    Extract Section objects from a Docling document object.
+    Tries structured text items first, falls back to markdown/text export.
     """
-    from docling.document_converter import DocumentConverter
-
-    converter = DocumentConverter()
-    result    = converter.convert(file_path)
-    doc       = result.document
-
     sections: list[Section] = []
     order = 0
 
@@ -95,24 +99,20 @@ def _extract_pdf_sync(file_path: str) -> list[Section]:
             order += 1
 
     except Exception as exc:
-        logger.error(
-            "Docling structured iteration failed for %s: %s",
-            file_path, exc, exc_info=True,
-        )
+        logger.warning("Docling structured iteration failed: %s", exc)
         sections = []
 
-    # ── Fallback: try multiple export methods until one yields content ─────────
+    # ── Fallback: export to markdown or plain text ────────────────────────────
     if not sections:
         exported_text = ""
-
         for export_method in ("export_to_markdown", "export_to_text"):
             if hasattr(doc, export_method):
                 try:
                     exported_text = getattr(doc, export_method)()
                     if exported_text and exported_text.strip():
                         logger.info(
-                            "%s fallback used for %s (%d chars)",
-                            export_method, file_path, len(exported_text)
+                            "Docling %s fallback used (%d chars)",
+                            export_method, len(exported_text),
                         )
                         break
                 except Exception as exc:
@@ -131,13 +131,165 @@ def _extract_pdf_sync(file_path: str) -> list[Section]:
     return sections
 
 
+def _docling_fast_sync(file_path: str) -> list[Section]:
+    """
+    Pass 1 — Docling with OCR and table structure disabled.
+    Reads the embedded text layer only. Blocking — runs in executor.
+    """
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+
+    options = PdfPipelineOptions(do_ocr=False, do_table_structure=False)
+    converter = DocumentConverter(
+        format_options={"pdf": PdfFormatOption(pipeline_options=options)}
+    )
+    result = converter.convert(file_path)
+    return _sections_from_docling_doc(result.document)
+
+
+def _pymupdf_sync(file_path: str) -> list[Section]:
+    """
+    Pass 2 — PyMuPDF fallback. Extracts raw text from the PDF text layer.
+    Much faster than Docling (~1s) but produces no structural labels.
+    Blocking — runs in executor.
+
+    Requires: pip install pymupdf
+    """
+    import fitz  # pymupdf
+
+    sections: list[Section] = []
+    doc = fitz.open(file_path)
+
+    for page_num, page in enumerate(doc):
+        text = page.get_text().strip()
+        if not text:
+            continue
+        # Split each page into paragraphs so chunk sizes stay manageable
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        for para in paragraphs:
+            sections.append(Section(
+                section_type="body",
+                content=para,
+                section_order=page_num,
+                title="",
+            ))
+
+    doc.close()
+    return sections
+
+
+def _docling_ocr_sync(file_path: str) -> list[Section]:
+    """
+    Pass 3 — Docling with full OCR enabled.
+    Only used for scanned/image-only PDFs where both Pass 1 and Pass 2 failed.
+    Blocking — runs in executor. May take several minutes on CPU.
+    """
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+
+    options = PdfPipelineOptions(do_ocr=True, do_table_structure=False)
+    converter = DocumentConverter(
+        format_options={"pdf": PdfFormatOption(pipeline_options=options)}
+    )
+    result = converter.convert(file_path)
+    return _sections_from_docling_doc(result.document)
+
+
+async def _extract_pdf(file_path: str) -> list[Section]:
+    """
+    Three-pass PDF extraction with timeout and PyMuPDF fallback.
+
+    Pass 1: Docling fast (no OCR), timeout = DOCLING_FAST_TIMEOUT seconds.
+            Accepted if it completes in time AND yields >= _OCR_FALLBACK_THRESHOLD chars.
+    Pass 2: PyMuPDF — triggered on timeout OR insufficient chars from Pass 1.
+            Accepted if it yields >= _OCR_FALLBACK_THRESHOLD chars.
+    Pass 3: Docling OCR — triggered only when both Pass 1 and Pass 2 are insufficient.
+            Last resort for genuinely scanned PDFs.
+    """
+    loop    = asyncio.get_running_loop()
+    timeout = float(cfg.DOCLING_FAST_TIMEOUT)
+
+    # ── Pass 1: Docling fast ──────────────────────────────────────────────────
+    logger.info("Extraction pass 1 (Docling fast, timeout=%ds): %s", timeout, file_path)
+    sections: list[Section] = []
+
+    try:
+        sections = await asyncio.wait_for(
+            loop.run_in_executor(None, _docling_fast_sync, file_path),
+            timeout=timeout,
+        )
+        fast_chars = sum(len(s.content) for s in sections)
+        logger.info("Pass 1 complete: %d chars from %s", fast_chars, file_path)
+
+        if fast_chars >= _OCR_FALLBACK_THRESHOLD:
+            return sections   # ✓ fast path succeeded
+
+        logger.warning(
+            "Pass 1 yielded only %d chars (threshold=%d) for %s — trying PyMuPDF.",
+            fast_chars, _OCR_FALLBACK_THRESHOLD, file_path,
+        )
+
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Pass 1 timed out after %ds for %s — trying PyMuPDF.",
+            timeout, file_path,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Pass 1 (Docling fast) failed for %s: %s — trying PyMuPDF.",
+            file_path, exc,
+        )
+
+    # ── Pass 2: PyMuPDF ───────────────────────────────────────────────────────
+    logger.info("Extraction pass 2 (PyMuPDF): %s", file_path)
+    try:
+        sections = await loop.run_in_executor(None, _pymupdf_sync, file_path)
+        pymupdf_chars = sum(len(s.content) for s in sections)
+        logger.info("Pass 2 complete: %d chars from %s", pymupdf_chars, file_path)
+
+        if pymupdf_chars >= _OCR_FALLBACK_THRESHOLD:
+            return sections   # ✓ PyMuPDF succeeded
+
+        logger.warning(
+            "Pass 2 (PyMuPDF) yielded only %d chars for %s — falling back to OCR.",
+            pymupdf_chars, file_path,
+        )
+
+    except ImportError:
+        logger.warning(
+            "PyMuPDF is not installed — skipping pass 2. "
+            "Install it with: pip install pymupdf"
+        )
+    except Exception as exc:
+        logger.warning(
+            "Pass 2 (PyMuPDF) failed for %s: %s — falling back to OCR.",
+            file_path, exc,
+        )
+
+    # ── Pass 3: Docling OCR ───────────────────────────────────────────────────
+    logger.warning(
+        "Extraction pass 3 (Docling OCR) for %s — "
+        "PDF may be scanned. This may take several minutes on CPU.",
+        file_path,
+    )
+    try:
+        sections = await loop.run_in_executor(None, _docling_ocr_sync, file_path)
+        ocr_chars = sum(len(s.content) for s in sections)
+        logger.info("Pass 3 (OCR) complete: %d chars from %s", ocr_chars, file_path)
+        return sections
+
+    except Exception as exc:
+        raise ExtractionError(
+            f"All extraction passes failed for {file_path!r}. "
+            f"Last error (Docling OCR): {exc}"
+        ) from exc
+
+
 def _extract_bioc_sync(file_path: str) -> list[Section]:
     """
     Parse a PubMed BioC JSON file and return a list of Sections.
-    This is blocking — call it inside run_in_executor.
+    Blocking — runs in executor.
     """
-    # FIX E1: Wrap json.load() so malformed input raises ExtractionError
-    # instead of a raw json.JSONDecodeError that the pipeline cannot catch.
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -186,7 +338,7 @@ async def extract(document: DocumentInput) -> ExtractedDocument:
     Extract text and structure from a document.
 
     Supports PDF files and PubMed BioC JSON files.
-    Raises ExtractionError if the result contains less than 100 characters.
+    Raises ExtractionError if the result contains less than _MIN_CONTENT_CHARS.
     """
     file_path = document.file_path
 
@@ -200,15 +352,12 @@ async def extract(document: DocumentInput) -> ExtractedDocument:
         raise ExtractionError(f"File not found: {file_path}")
 
     suffix = path.suffix.lower()
-
-    # FIX E3: Use get_running_loop() — get_event_loop() is deprecated in
-    # Python 3.10+ and may raise RuntimeError inside coroutines in Python 3.12.
-    loop = asyncio.get_running_loop()
+    loop   = asyncio.get_running_loop()
 
     logger.info("Extracting %s (source=%s)", path.name, document.source)
 
     if suffix == ".pdf":
-        sections = await loop.run_in_executor(None, _extract_pdf_sync, file_path)
+        sections = await _extract_pdf(file_path)
     elif suffix == ".json":
         sections = await loop.run_in_executor(None, _extract_bioc_sync, file_path)
     else:
@@ -222,8 +371,9 @@ async def extract(document: DocumentInput) -> ExtractedDocument:
         raise ExtractionError(
             f"Extraction produced only {total_chars} characters for "
             f"paper_id={document.paper_id!r} — minimum is {_MIN_CONTENT_CHARS}. "
-            "If this is a PDF, ensure Docling models are fully downloaded by running: "
-            "python -c \"from docling.document_converter import DocumentConverter; DocumentConverter()\""
+            "If this is a PDF, ensure Docling models are downloaded by running: "
+            "python -c \"from docling.document_converter import DocumentConverter; "
+            "DocumentConverter()\""
         )
 
     logger.info(

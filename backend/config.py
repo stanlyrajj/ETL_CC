@@ -69,6 +69,11 @@ class Config:
         # ── Embedding ─────────────────────────────────────────────────────────
         self.EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
+        # ── Extraction ────────────────────────────────────────────────────────
+        # How long to wait for Docling's fast (no-OCR) pass before giving up
+        # and falling back to PyMuPDF. Set higher on slow machines.
+        self.DOCLING_FAST_TIMEOUT: int = _int_env("DOCLING_FAST_TIMEOUT", "60")
+
         # ── CORS ──────────────────────────────────────────────────────────────
         self.CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "http://localhost:3000")
 
