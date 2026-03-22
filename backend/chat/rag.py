@@ -7,14 +7,16 @@ builds context, calls the LLM, saves the exchange, and returns the response.
 
 import logging
 
-from chat.session import add_message, get_session
+from database import db
+from chat.session import get_session
 from llm.factory import get_provider
 from processing.vector_store import VectorStore
 from processing.embedder import embed
 
 logger = logging.getLogger(__name__)
 
-_MAX_CONTEXT_CHARS = 4000
+_MAX_CONTEXT_CHARS  = 4000
+_MAX_HISTORY_MSGS   = 20   # keep last N messages to prevent context overflow
 
 # Shared VectorStore instance — created once on first call
 _vector_store: VectorStore | None = None
@@ -41,11 +43,10 @@ async def respond(session_id: str, message: str, level: str) -> str:
     2. Raise RAGException if retrieval fails or returns nothing
     3. Build a context string from retrieved chunks, max 4000 chars
     4. Raise RAGException if context is empty after assembly
-    5. Get message history for the session
+    5. Get message history for the session (truncated to last 20)
     6. Call the LLM with context, history, message, and level
-    7. Save the user message to the database
-    8. Save the assistant response to the database
-    9. Return the assistant response string
+    7. Save both user message and assistant response atomically
+    8. Return the assistant response string
     """
     # ── 1. Retrieve top 5 relevant chunks ─────────────────────────────────────
     session = await get_session(session_id)
@@ -89,27 +90,32 @@ async def respond(session_id: str, message: str, level: str) -> str:
     context = "\n\n".join(context_parts)
 
     # ── 4. Raise if context is empty after assembly ────────────────────────────
-    # FIX R1: Guard against results whose content fields are all empty strings.
-    # Without this check, the LLM receives an empty context and produces a
-    # generic "I have no information" response instead of a clear error.
+    # Guard against results whose content fields are all empty strings.
     if not context.strip():
         raise RAGException(
             f"Retrieved chunks contain no usable content for paper_id={paper_id!r}. "
             "The paper may need to be re-processed."
         )
 
-    # ── 5. Get message history ─────────────────────────────────────────────────
-    # Convert to the list[{"role": ..., "content": ...}] format LLM providers expect
+    # ── 5. Get message history, truncated to last _MAX_HISTORY_MSGS ───────────
+    # Truncate before building the list to prevent LLM context overflow.
+    all_messages = session["messages"]
+    if len(all_messages) > _MAX_HISTORY_MSGS:
+        all_messages = all_messages[-_MAX_HISTORY_MSGS:]
+
     history = [
         {"role": msg["role"], "content": msg["content"]}
-        for msg in session["messages"]
+        for msg in all_messages
     ]
 
     # ── 6. Call the LLM ───────────────────────────────────────────────────────
     provider = get_provider()
 
-    # Get paper metadata from the session for the LLM prompt
-    title   = session.get("topic") or "Research Paper"
+    # FIX: Resolve title correctly — prefer session["title"] (set from paper.title
+    # after extraction), fall back to session["topic"], then a safe default.
+    # Previously only session["topic"] was used, so the LLM prompt always showed
+    # the search topic string instead of the paper's actual title.
+    title = session.get("title") or session.get("topic") or "Research Paper"
     authors: list[str] = []
 
     response = await provider.chat_response(
@@ -121,16 +127,17 @@ async def respond(session_id: str, message: str, level: str) -> str:
         level=level,
     )
 
-    # ── 7. Save user message ──────────────────────────────────────────────────
-    await add_message(session_id, role="user", content=message, level=level)
-
-    # ── 8. Save assistant response ────────────────────────────────────────────
-    await add_message(session_id, role="assistant", content=response, level=level)
+    # ── 7. Save user message and assistant response atomically ────────────────
+    # Both writes share a single db.session() so a crash between them cannot
+    # leave an orphaned user message with no matching assistant reply.
+    async with db.session() as sess:
+        await db.add_message(sess, session_id, role="user",      content=message,  level=level)
+        await db.add_message(sess, session_id, role="assistant", content=response, level=level)
 
     logger.info(
         "RAG response: session=%s paper=%s level=%s context_chars=%d response_chars=%d",
         session_id, paper_id, level, len(context), len(response),
     )
 
-    # ── 9. Return the response ────────────────────────────────────────────────
+    # ── 8. Return the response ────────────────────────────────────────────────
     return response

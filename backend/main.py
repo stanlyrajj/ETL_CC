@@ -52,29 +52,34 @@ async def startup():
     await db.init()
     logger.info("Database initialised.")
 
-    # 3. Reset any papers stuck in intermediate stages back to pending
-    #    and re-queue them so they complete on restart.
+    # 3. Find papers stuck mid-pipeline and re-queue only those.
+    #    Papers already at "pending" before this restart are left alone —
+    #    they were never started and will be picked up when the user re-submits.
+    #    Papers at "processed" or "failed_*" are also left alone.
     stuck_stages = ("downloading", "downloaded", "processing")
-    requeued = 0
 
+    # Collect the stuck papers first, then reset them in a single session.
+    stuck_papers = []
     async with db.session() as sess:
         for stage in stuck_stages:
-            stuck = await db.list_papers(sess, stage=stage, limit=200)
-            for paper in stuck:
-                await db.set_stage(sess, paper.paper_id, "pending")
-                requeued += 1
+            found = await db.list_papers(sess, stage=stage, limit=200)
+            stuck_papers.extend(found)
 
-    if requeued:
-        logger.info("Reset %d stuck paper(s) to 'pending' for re-processing.", requeued)
+    if stuck_papers:
+        async with db.session() as sess:
+            for paper in stuck_papers:
+                await db.set_stage(sess, paper.paper_id, "pending")
+
+        logger.info(
+            "Reset %d stuck paper(s) to 'pending' for re-processing.", len(stuck_papers)
+        )
 
         from api.papers import _run_pipeline
         from api.progress import get_or_create_paper_queue
         from ingestion.validator import DocumentInput
 
-        async with db.session() as sess:
-            pending = await db.list_papers(sess, stage="pending", limit=200)
-
-        for paper in pending:
+        # Re-queue only the papers that were actually stuck — not all pending papers.
+        for paper in stuck_papers:
             doc = DocumentInput(
                 paper_id=paper.paper_id,
                 source=paper.source or "local",
