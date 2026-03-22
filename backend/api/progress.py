@@ -18,14 +18,13 @@ from typing import AsyncGenerator
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
+from database import db
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 # ── In-memory event queues ─────────────────────────────────────────────────────
-# Each key maps to an asyncio.Queue of event dicts.
-# Queues are created on first push and removed when the client disconnects.
-
 _paper_queues:    dict[str, asyncio.Queue] = {}
 _generate_queues: dict[str, asyncio.Queue] = {}
 
@@ -73,7 +72,6 @@ async def _paper_stream(paper_id: str) -> AsyncGenerator[str, None]:
 
     try:
         while True:
-            # Heartbeat every 30 seconds to keep the connection alive
             now = time.monotonic()
             if now - last_heartbeat >= 30:
                 yield _format_sse("heartbeat", {"paper_id": paper_id, "ts": int(now)})
@@ -86,14 +84,12 @@ async def _paper_stream(paper_id: str) -> AsyncGenerator[str, None]:
 
             yield _format_sse(item["event"], item["data"])
 
-            # Stop streaming after terminal events
             if item["event"] == "done":
                 break
 
     except asyncio.CancelledError:
         logger.debug("SSE paper stream cancelled: paper_id=%s", paper_id)
     finally:
-        # Clean up queue when client disconnects
         _paper_queues.pop(paper_id, None)
 
 
@@ -131,13 +127,57 @@ async def _generate_stream(queue_key: str) -> AsyncGenerator[str, None]:
 async def paper_progress(paper_id: str):
     """
     SSE stream for pipeline progress on a paper.
+
+    If the paper is already processed (or failed) when the client connects,
+    sends a synthetic 'done' event immediately so the frontend doesn't wait
+    for an event that already fired before the SSE connection was established.
+
     Events: progress (stage updates), done (success/failure), heartbeat.
     """
+    # Check current stage — if the pipeline already finished, respond immediately
+    # rather than making the client wait for a 'done' event that already fired.
+    async with db.session() as sess:
+        paper = await db.get_paper(sess, paper_id)
+
+    if paper is not None:
+        stage = paper.pipeline_stage
+
+        if stage == "processed":
+            # Pipeline already done — send synthetic done event immediately
+            async def _already_done() -> AsyncGenerator[str, None]:
+                yield _format_sse("done", {
+                    "paper_id":    paper_id,
+                    "success":     True,
+                    "chunk_count": paper.chunk_count,
+                    "message":     "Processing complete — paper already processed",
+                })
+            return StreamingResponse(
+                _already_done(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        if stage in ("failed_download", "failed_processing"):
+            # Pipeline already failed — send synthetic done event immediately
+            async def _already_failed() -> AsyncGenerator[str, None]:
+                yield _format_sse("done", {
+                    "paper_id": paper_id,
+                    "success":  False,
+                    "stage":    stage,
+                    "error":    paper.error_message or "Processing failed",
+                })
+            return StreamingResponse(
+                _already_failed(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+    # Pipeline is still in progress — stream live events normally
     return StreamingResponse(
         _paper_stream(paper_id),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":    "no-cache",
+            "Cache-Control":     "no-cache",
             "X-Accel-Buffering": "no",
         },
     )
@@ -153,7 +193,7 @@ async def generate_progress(queue_key: str):
         _generate_stream(queue_key),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":    "no-cache",
+            "Cache-Control":     "no-cache",
             "X-Accel-Buffering": "no",
         },
     )
