@@ -19,6 +19,10 @@ interface PaperStatus extends Paper {
   sseMessage?: string
 }
 
+// Direct backend URL for SSE connections — bypasses Next.js proxy which
+// buffers streamed responses and prevents SSE events from reaching the browser.
+const BACKEND = 'http://localhost:8000'
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function stageLabel(stage: string): string {
@@ -328,7 +332,10 @@ function ProcessingView({ papers, onDone }: {
 
   useEffect(() => {
     papers.forEach(paper => {
-      const es = new EventSource(`/api/papers/${paper.paper_id}/progress`)
+      // FIX: Connect directly to the backend for SSE — not through /api/...
+      // Next.js dev server proxy buffers streamed responses, so SSE events
+      // never arrive in the browser when routed through the Next.js rewrite.
+      const es = new EventSource(`${BACKEND}/api/papers/${paper.paper_id}/progress`)
       esRefs.current[paper.paper_id] = es
 
       es.addEventListener('progress', (e: MessageEvent) => {
@@ -420,16 +427,16 @@ function ProcessingView({ papers, onDone }: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function GenerationPanel({ paperId }: { paperId: string }) {
-  const [platform, setPlatform]     = useState<Platform>('twitter')
-  const [style, setStyle]           = useState('educational')
-  const [tone, setTone]             = useState('conversational')
+  const [platform, setPlatform]       = useState<Platform>('twitter')
+  const [style, setStyle]             = useState('educational')
+  const [tone, setTone]               = useState('conversational')
   const [colorScheme, setColorScheme] = useState('light')
-  const [loading, setLoading]       = useState(false)
-  const [error, setError]           = useState('')
-  const [result, setResult]         = useState<SocialItem | null>(null)
-  const [exporting, setExporting]   = useState(false)
-  const [exportUrl, setExportUrl]   = useState('')
-  const [shareLinks, setShareLinks] = useState<{ linkedin_url: string; twitter_url: string } | null>(null)
+  const [loading, setLoading]         = useState(false)
+  const [error, setError]             = useState('')
+  const [result, setResult]           = useState<SocialItem | null>(null)
+  const [exporting, setExporting]     = useState(false)
+  const [exportUrl, setExportUrl]     = useState('')
+  const [shareLinks, setShareLinks]   = useState<{ linkedin_url: string; twitter_url: string } | null>(null)
   const esRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
@@ -445,13 +452,13 @@ function GenerationPanel({ paperId }: { paperId: string }) {
       const qk = res.queue_key
 
       await new Promise<void>((resolve, reject) => {
-        const es = new EventSource(`/api/generate/${qk}/progress`)
+        // FIX: Connect SSE directly to backend, not through Next.js proxy
+        const es = new EventSource(`${BACKEND}/api/generate/${qk}/progress`)
         esRef.current = es
 
         es.addEventListener('completed', async (e: MessageEvent) => {
           try {
             const data = JSON.parse(e.data)
-            // Fetch saved content from history
             const hist = await generationHistory(paperId, platform)
             const latest = hist.items[0] ?? null
             setResult(latest)
@@ -683,7 +690,6 @@ function ChatView({ initialPapers, onNewSearch }: {
     try {
       const res = await listSessions()
       setSessions(res.sessions)
-      // Auto-open the most recent session if we have processed papers
       if (res.sessions.length > 0 && !activeSession) {
         await openSession(res.sessions[0].session_id)
       }
@@ -716,7 +722,6 @@ function ChatView({ initialPapers, onNewSearch }: {
     setChatError('')
     setSending(true)
 
-    // Optimistic UI
     const tempMsg: Message = { id: Date.now(), role: 'user', content: text, level, created_at: null }
     setMessages(prev => [...prev, tempMsg])
 
@@ -745,7 +750,6 @@ function ChatView({ initialPapers, onNewSearch }: {
 
       {/* ── Sidebar ── */}
       <div style={{ width: '260px', flexShrink: 0, background: 'var(--bg-2)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {/* Logo + new search */}
         <div style={{ padding: '16px', borderBottom: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
             <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', flexShrink: 0 }} />
@@ -756,7 +760,6 @@ function ChatView({ initialPapers, onNewSearch }: {
           </button>
         </div>
 
-        {/* Sessions list */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
           {sessError && <div className="notice notice-error" style={{ margin: '8px' }}>{sessError}</div>}
           {sessions.length === 0 && (
@@ -797,7 +800,6 @@ function ChatView({ initialPapers, onNewSearch }: {
               </p>
             )}
           </div>
-          {/* Level selector */}
           <div style={{ display: 'flex', gap: '4px' }}>
             {(['beginner', 'intermediate', 'advanced'] as Level[]).map(l => (
               <button key={l} onClick={() => handleLevelChange(l)}
