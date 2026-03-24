@@ -2,6 +2,7 @@
 factory.py — Returns the correct LLMProvider instance based on LLM_PROVIDER config.
 
 Lazy initialization: the provider is created on first call, not at import time.
+set_model() allows switching the active model at runtime without restarting.
 """
 
 import logging
@@ -11,7 +12,7 @@ from llm.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_PROVIDERS = ("openai", "gemini", "anthropic")
+_SUPPORTED_PROVIDERS = ("openai", "gemini", "anthropic", "openrouter")
 
 # Module-level cache — created once on first call to get_provider()
 _instance: LLMProvider | None = None
@@ -42,6 +43,11 @@ def get_provider() -> LLMProvider:
         from llm.anthropic import AnthropicProvider
         _instance = AnthropicProvider()
 
+    elif provider == "openrouter":
+        # OpenRouter is OpenAI-compatible — reuse OpenAIProvider with base_url set
+        from llm.openai import OpenAIProvider
+        _instance = OpenAIProvider()
+
     else:
         raise ValueError(
             f"Unknown LLM_PROVIDER '{provider}'. "
@@ -49,5 +55,23 @@ def get_provider() -> LLMProvider:
             "Set the correct value in your .env file."
         )
 
-    logger.info("LLM provider initialized: %s (model=%s)", provider, cfg.LLM_MODEL)
+    logger.info(
+        "LLM provider initialized: %s (model=%s%s)",
+        provider,
+        cfg.LLM_MODEL,
+        f" via {cfg.LLM_BASE_URL}" if cfg.LLM_BASE_URL else "",
+    )
     return _instance
+
+
+def set_model(model_id: str) -> None:
+    """
+    Switch the active model and reset the provider cache.
+
+    The next call to get_provider() will create a fresh provider instance
+    using the new model name. Used by POST /api/models/select.
+    """
+    global _instance
+    cfg.LLM_MODEL = model_id
+    _instance = None
+    logger.info("LLM model switched to: %s", model_id)

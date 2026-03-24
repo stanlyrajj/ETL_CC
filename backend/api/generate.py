@@ -1,5 +1,6 @@
 """
-generate.py — Social content generation, PDF export, and share deeplink endpoints.
+generate.py — Social content generation, PDF export, share deeplink, and model
+selection endpoints.
 
 Every route returns explicit success or failure — no silent failures.
 """
@@ -16,7 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from config import cfg
+from config import cfg, AVAILABLE_MODELS
 from database import SocialContent, db
 from api.progress import get_or_create_generate_queue, push_generate_event
 from content.carousel      import generate as carousel_generate
@@ -39,7 +40,97 @@ class GenerateRequest(BaseModel):
     platform:     str = Field(...)
     style:        str = Field("educational")
     tone:         str = Field("conversational")
-    color_scheme: str = Field("light")     # only used for carousel
+    color_scheme: str = Field("light")
+
+
+class ModelSelectRequest(BaseModel):
+    model_id: str = Field(..., min_length=1)
+
+
+# ── Model selection routes ────────────────────────────────────────────────────
+
+@router.get("/models")
+async def list_models():
+    """
+    Return the curated list of available models.
+
+    When LLM_PROVIDER=openrouter, returns the full curated free model list
+    with the currently active model marked. For other providers, returns
+    a single entry showing the configured model.
+    """
+    provider = cfg.LLM_PROVIDER.lower()
+
+    if provider == "openrouter":
+        models = [
+            {**m, "active": m["id"] == cfg.LLM_MODEL}
+            for m in AVAILABLE_MODELS
+        ]
+        return {
+            "provider":      provider,
+            "active_model":  cfg.LLM_MODEL,
+            "models":        models,
+        }
+
+    # For non-OpenRouter providers, show the single configured model
+    return {
+        "provider":     provider,
+        "active_model": cfg.LLM_MODEL,
+        "models": [
+            {
+                "id":          cfg.LLM_MODEL,
+                "name":        cfg.LLM_MODEL,
+                "provider":    provider,
+                "description": f"Configured via LLM_MODEL in .env",
+                "recommended": True,
+                "active":      True,
+            }
+        ],
+    }
+
+
+@router.post("/models/select")
+async def select_model(request: ModelSelectRequest):
+    """
+    Switch the active LLM model at runtime.
+
+    Only permitted when LLM_PROVIDER=openrouter — switching models between
+    providers (e.g. from Gemini to OpenAI) requires a server restart since
+    it changes the underlying SDK and authentication.
+
+    The selected model must be in the curated AVAILABLE_MODELS list.
+    """
+    if cfg.LLM_PROVIDER.lower() != "openrouter":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Model switching is only available when LLM_PROVIDER=openrouter. "
+                f"Current provider: {cfg.LLM_PROVIDER!r}. "
+                "To change the model for other providers, update LLM_MODEL in .env and restart."
+            ),
+        )
+
+    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
+    if request.model_id not in valid_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Model {request.model_id!r} is not in the curated list. "
+                f"Available models: {sorted(valid_ids)}"
+            ),
+        )
+
+    from llm.factory import set_model
+    set_model(request.model_id)
+
+    model_info = next(m for m in AVAILABLE_MODELS if m["id"] == request.model_id)
+    logger.info("Model switched to: %s", request.model_id)
+
+    return {
+        "success":      True,
+        "active_model": request.model_id,
+        "model":        model_info,
+        "message":      f"Switched to {model_info['name']}.",
+    }
 
 
 # ── Background generation task ────────────────────────────────────────────────
@@ -117,7 +208,6 @@ async def generate_content(request: GenerateRequest, background_tasks: Backgroun
             detail=f"platform must be one of {_VALID_PLATFORMS}. Got: {platform!r}",
         )
 
-    # Verify paper exists and is processed
     async with db.session() as sess:
         paper = await db.get_paper(sess, request.paper_id)
     if paper is None:
@@ -137,8 +227,6 @@ async def generate_content(request: GenerateRequest, background_tasks: Backgroun
 
     queue_key = f"{request.paper_id}_{platform}_{uuid.uuid4().hex[:8]}"
     get_or_create_generate_queue(queue_key)
-
-    # Use FastAPI BackgroundTasks for safe task scheduling
     background_tasks.add_task(_run_generate, request, queue_key)
 
     return {
@@ -151,10 +239,7 @@ async def generate_content(request: GenerateRequest, background_tasks: Backgroun
 
 @router.get("/generate/history/{paper_id}")
 async def generation_history(paper_id: str, platform: Optional[str] = None):
-    """
-    Return past generation outputs for a paper.
-    Optional platform filter: twitter | linkedin | carousel
-    """
+    """Return past generation outputs for a paper."""
     async with db.session() as sess:
         paper = await db.get_paper(sess, paper_id)
         if paper is None:
@@ -182,11 +267,7 @@ async def generation_history(paper_id: str, platform: Optional[str] = None):
 
 @router.post("/generate/{content_id}/export")
 async def export_carousel(content_id: int):
-    """
-    Render a carousel SocialContent record to a PDF file.
-    Stores the output path back in the response.
-    Only valid for platform='carousel'.
-    """
+    """Render a carousel SocialContent record to a PDF file."""
     async with db.session() as sess:
         result = await sess.execute(
             select(SocialContent).where(SocialContent.id == content_id)
@@ -194,10 +275,7 @@ async def export_carousel(content_id: int):
         item = result.scalar_one_or_none()
 
     if item is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Content not found: id={content_id}",
-        )
+        raise HTTPException(status_code=404, detail=f"Content not found: id={content_id}")
     if item.platform != "carousel":
         raise HTTPException(
             status_code=400,
@@ -207,24 +285,15 @@ async def export_carousel(content_id: int):
     try:
         slides = json.loads(item.content)
     except (json.JSONDecodeError, TypeError) as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Could not parse carousel content: {exc}",
-        )
+        raise HTTPException(status_code=500, detail=f"Could not parse carousel content: {exc}")
 
     if not slides:
-        raise HTTPException(
-            status_code=400,
-            detail="Carousel has no slides to render.",
-        )
+        raise HTTPException(status_code=400, detail="Carousel has no slides to render.")
 
     try:
         pdf_path = render_pdf(slides, color_scheme="light", output_dir=cfg.CAROUSEL_OUTPUT_DIR)
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"PDF rendering failed: {exc}",
-        )
+        raise HTTPException(status_code=500, detail=f"PDF rendering failed: {exc}")
 
     filename = Path(pdf_path).name
     return {
@@ -238,18 +307,12 @@ async def export_carousel(content_id: int):
 
 @router.get("/generate/{content_id}/download")
 async def download_carousel(content_id: int, filename: Optional[str] = None):
-    """
-    Return a carousel PDF as a file download.
-
-    Pass ?filename=carousel_XXXXX.pdf (from the export response) to retrieve
-    a specific file. Without it, returns the most recently rendered PDF.
-    """
+    """Return a carousel PDF as a file download."""
     output_dir = Path(cfg.CAROUSEL_OUTPUT_DIR)
     if not output_dir.exists():
         raise HTTPException(status_code=404, detail="No carousel outputs found.")
 
     if filename:
-        # Sanitise: only allow simple filenames, no path traversal
         safe_name = Path(filename).name
         pdf_path  = output_dir / safe_name
         if not pdf_path.exists():
@@ -275,9 +338,7 @@ async def download_carousel(content_id: int, filename: Optional[str] = None):
 
 @router.get("/generate/{content_id}/share")
 async def share_content(content_id: int):
-    """
-    Return LinkedIn and Twitter deep-link URLs for a content record.
-    """
+    """Return LinkedIn and Twitter deep-link URLs for a content record."""
     async with db.session() as sess:
         result = await sess.execute(
             select(SocialContent).where(SocialContent.id == content_id)
@@ -285,10 +346,7 @@ async def share_content(content_id: int):
         item = result.scalar_one_or_none()
 
     if item is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Content not found: id={content_id}",
-        )
+        raise HTTPException(status_code=404, detail=f"Content not found: id={content_id}")
 
     hashtags: list[str] = item.hashtags or []
 
