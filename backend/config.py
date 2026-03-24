@@ -8,13 +8,47 @@ load_dotenv(Path(__file__).parent / ".env")
 
 # Default models per provider
 _DEFAULT_MODELS = {
-    "openai":    "gpt-4o-mini",
-    "gemini":    "gemini-2.0-flash",
-    "anthropic": "claude-sonnet-4-20250514",
+    "openai":     "gpt-4o-mini",
+    "gemini":     "gemini-2.0-flash",
+    "anthropic":  "claude-sonnet-4-20250514",
+    "openrouter": "meta-llama/llama-3.3-70b-instruct:free",
 }
 
 # Valid providers — checked in validate()
-_VALID_PROVIDERS = {"openai", "gemini", "anthropic"}
+_VALID_PROVIDERS = {"openai", "gemini", "anthropic", "openrouter"}
+
+# Curated list of free OpenRouter models tested with this codebase.
+# Exposed via GET /api/models when LLM_PROVIDER=openrouter.
+AVAILABLE_MODELS = [
+    {
+        "id":          "meta-llama/llama-3.3-70b-instruct:free",
+        "name":        "Llama 3.3 70B",
+        "provider":    "Meta",
+        "description": "Best quality. Strong reasoning and JSON output.",
+        "recommended": True,
+    },
+    {
+        "id":          "google/gemini-2.0-flash-exp:free",
+        "name":        "Gemini 2.0 Flash (free)",
+        "provider":    "Google",
+        "description": "Fast and capable. Good for chat and generation.",
+        "recommended": False,
+    },
+    {
+        "id":          "mistralai/mistral-7b-instruct:free",
+        "name":        "Mistral 7B",
+        "provider":    "Mistral",
+        "description": "Lightweight and fast. May occasionally miss JSON structure.",
+        "recommended": False,
+    },
+    {
+        "id":          "qwen/qwen-2.5-72b-instruct:free",
+        "name":        "Qwen 2.5 72B",
+        "provider":    "Alibaba",
+        "description": "Strong alternative to Llama. Good multilingual support.",
+        "recommended": False,
+    },
+]
 
 
 def _int_env(key: str, default: str) -> int:
@@ -47,6 +81,11 @@ class Config:
         default_model = _DEFAULT_MODELS.get(self.LLM_PROVIDER.lower(), "")
         self.LLM_MODEL: str = os.getenv("LLM_MODEL", default_model)
 
+        # ── LLM base URL ──────────────────────────────────────────────────────
+        # Leave unset for direct provider access (OpenAI, Gemini, Anthropic).
+        # Required when LLM_PROVIDER=openrouter: set to https://openrouter.ai/api/v1
+        self.LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "")
+
         # ── Database ──────────────────────────────────────────────────────────
         self.DATABASE_URL: str = os.getenv(
             "DATABASE_URL", "sqlite+aiosqlite:///./researchrag.db"
@@ -70,8 +109,6 @@ class Config:
         self.EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
         # ── Extraction ────────────────────────────────────────────────────────
-        # How long to wait for Docling's fast (no-OCR) pass before giving up
-        # and falling back to PyMuPDF. Set higher on slow machines.
         self.DOCLING_FAST_TIMEOUT: int = _int_env("DOCLING_FAST_TIMEOUT", "60")
 
         # ── CORS ──────────────────────────────────────────────────────────────
@@ -102,6 +139,12 @@ class Config:
             errors.append(
                 f"LLM_MODEL could not be determined for provider "
                 f"{self.LLM_PROVIDER!r}. Set LLM_MODEL explicitly in your .env file."
+            )
+
+        if self.LLM_PROVIDER.lower() == "openrouter" and not self.LLM_BASE_URL:
+            errors.append(
+                "LLM_BASE_URL is required when LLM_PROVIDER=openrouter. "
+                "Set it to: https://openrouter.ai/api/v1"
             )
 
         if self.CHUNK_OVERLAP >= self.CHUNK_SIZE:
