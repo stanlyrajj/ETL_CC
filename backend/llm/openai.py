@@ -1,6 +1,9 @@
 """
 openai.py — OpenAI implementation of LLMProvider.
 
+Also used for OpenRouter — pass LLM_BASE_URL=https://openrouter.ai/api/v1
+and LLM_PROVIDER=openrouter to route through OpenRouter's unified API.
+
 All SDK calls run in run_in_executor (blocking SDK).
 All paper context is sanitized before use in prompts.
 Retries on transient errors up to MAX_RETRIES.
@@ -94,7 +97,14 @@ Create 6-8 slides. Keep each slide concise. No markdown, no extra text."""
 
 class OpenAIProvider(LLMProvider):
     def __init__(self):
-        self._client     = OpenAI(api_key=cfg.LLM_API_KEY)
+        # Pass base_url when set — this enables OpenRouter and other
+        # OpenAI-compatible providers without any other code changes.
+        client_kwargs = {"api_key": cfg.LLM_API_KEY}
+        if cfg.LLM_BASE_URL:
+            client_kwargs["base_url"] = cfg.LLM_BASE_URL
+            logger.info("OpenAI client using base_url: %s", cfg.LLM_BASE_URL)
+
+        self._client     = OpenAI(**client_kwargs)
         self._model_name = cfg.LLM_MODEL
 
     def _call_sync(self, messages: list[dict]) -> str:
@@ -107,8 +117,6 @@ class OpenAIProvider(LLMProvider):
 
     async def _with_retry(self, messages: list[dict]) -> str:
         """Run the blocking call in executor with retry on transient errors."""
-        # FIX L1: Use get_running_loop() — get_event_loop() is deprecated in
-        # Python 3.10+ and may raise RuntimeError inside coroutines in Python 3.12.
         loop = asyncio.get_running_loop()
         last_exc = None
         for attempt in range(1, cfg.MAX_RETRIES + 1):
@@ -139,7 +147,6 @@ class OpenAIProvider(LLMProvider):
             context=safe_context,
             level=level,
         )
-        # Prepend paper context to system prompt
         messages = [{"role": "system", "content": self.SYSTEM_PROMPT + "\n\n" + system_context}]
         if history:
             messages.extend(history)
