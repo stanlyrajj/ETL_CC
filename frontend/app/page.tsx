@@ -4,8 +4,9 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   searchPapers, uploadPaper, listSessions, getSession,
   sendMessage, updateLevel, generateContent, generationHistory,
-  exportCarousel, getShareLinks,
-  type Paper, type Session, type SessionDetail, type Message, type SocialItem,
+  exportCarousel, getShareLinks, getModels, selectModel,
+  type Paper, type Session, type SessionDetail, type Message,
+  type SocialItem, type ModelOption,
 } from './lib/api'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -19,21 +20,16 @@ interface PaperStatus extends Paper {
   sseMessage?: string
 }
 
-// Direct backend URL for SSE connections — bypasses Next.js proxy which
-// buffers streamed responses and prevents SSE events from reaching the browser.
+// Direct backend URL for SSE — bypasses Next.js proxy buffering
 const BACKEND = 'http://localhost:8000'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function stageLabel(stage: string): string {
   const map: Record<string, string> = {
-    pending: 'Pending',
-    downloading: 'Downloading…',
-    downloaded: 'Downloaded',
-    processing: 'Processing…',
-    processed: 'Ready',
-    failed_download: 'Download failed',
-    failed_processing: 'Processing failed',
+    pending: 'Pending', downloading: 'Downloading…', downloaded: 'Downloaded',
+    processing: 'Processing…', processed: 'Ready',
+    failed_download: 'Download failed', failed_processing: 'Processing failed',
   }
   return map[stage] ?? stage
 }
@@ -55,7 +51,7 @@ function Spinner({ size = '' }: { size?: string }) {
   return <span className={`spinner ${size}`} />
 }
 
-// ── Icon components ──────────────────────────────────────────────────────────
+// ── Icons ────────────────────────────────────────────────────────────────────
 
 function IconSearch() {
   return (
@@ -94,12 +90,10 @@ function IconDownload() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VIEW 1: Search / Upload
+// VIEW 1: Search / Upload  (with model picker when provider=openrouter)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SearchView({ onResults }: {
-  onResults: (papers: Paper[]) => void
-}) {
+function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
   const [topic, setTopic]       = useState('')
   const [source, setSource]     = useState<'both' | 'arxiv' | 'pubmed'>('both')
   const [limit, setLimit]       = useState(5)
@@ -110,11 +104,40 @@ function SearchView({ onResults }: {
   const [error, setError]       = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Model picker state — only shown when provider=openrouter
+  const [models, setModels]           = useState<ModelOption[]>([])
+  const [activeModel, setActiveModel] = useState('')
+  const [modelSwitching, setModelSwitching] = useState(false)
+  const [isOpenRouter, setIsOpenRouter]     = useState(false)
+
+  useEffect(() => {
+    getModels()
+      .then(res => {
+        if (res.provider === 'openrouter') {
+          setIsOpenRouter(true)
+          setModels(res.models)
+          setActiveModel(res.active_model)
+        }
+      })
+      .catch(() => { /* non-critical — hide picker on error */ })
+  }, [])
+
+  async function handleModelSelect(modelId: string) {
+    if (modelId === activeModel) return
+    setModelSwitching(true)
+    try {
+      await selectModel(modelId)
+      setActiveModel(modelId)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to switch model.')
+    } finally {
+      setModelSwitching(false)
+    }
+  }
+
   const topicError = topic.trim().length === 0 && topic.length > 0
     ? 'Topic cannot be empty.'
-    : topic.length > 200
-    ? 'Topic must be 200 characters or fewer.'
-    : ''
+    : topic.length > 200 ? 'Topic must be 200 characters or fewer.' : ''
 
   async function handleSearch(e: React.FormEvent) {
     e.preventDefault()
@@ -128,9 +151,7 @@ function SearchView({ onResults }: {
       onResults(result.papers)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Search failed.')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
   async function handleUpload(e: React.FormEvent) {
@@ -143,9 +164,7 @@ function SearchView({ onResults }: {
       onResults([result.paper])
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed.')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -174,13 +193,61 @@ function SearchView({ onResults }: {
           </p>
         </div>
 
+        {/* Model picker — only shown when provider=openrouter */}
+        {isOpenRouter && models.length > 0 && (
+          <div className="card" style={{ padding: '16px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+              <p style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                AI Model
+              </p>
+              {modelSwitching && <Spinner size="spinner-sm" />}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {models.map(m => (
+                <button
+                  key={m.id}
+                  onClick={() => handleModelSelect(m.id)}
+                  disabled={modelSwitching}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+                    gap: '12px', padding: '10px 12px', borderRadius: 'var(--radius)',
+                    border: `1px solid ${activeModel === m.id ? 'var(--accent)' : 'var(--border)'}`,
+                    background: activeModel === m.id ? 'var(--accent-glow)' : 'var(--bg)',
+                    cursor: modelSwitching ? 'not-allowed' : 'pointer',
+                    textAlign: 'left', transition: 'all 0.15s', opacity: modelSwitching ? 0.6 : 1,
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                      <span style={{ fontSize: '0.875rem', fontWeight: 500, color: activeModel === m.id ? 'var(--accent)' : 'var(--text)' }}>
+                        {m.name}
+                      </span>
+                      {m.recommended && (
+                        <span style={{ fontSize: '0.6875rem', background: 'var(--accent-glow)', color: 'var(--accent)', padding: '1px 6px', borderRadius: '10px', fontWeight: 500 }}>
+                          recommended
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', lineHeight: 1.4 }}>
+                      {m.description}
+                    </p>
+                  </div>
+                  {activeModel === m.id && (
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent)', flexShrink: 0, marginTop: '4px' }} />
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Mode toggle */}
         <div style={{ display: 'flex', background: 'var(--bg-2)', borderRadius: 'var(--radius)', padding: '3px', marginBottom: '20px', border: '1px solid var(--border)' }}>
           {(['search', 'upload'] as const).map(m => (
             <button key={m} onClick={() => { setMode(m); setError('') }}
               style={{
-                flex: 1, padding: '7px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)',
-                fontSize: '0.875rem', fontWeight: 500, transition: 'all 0.15s',
+                flex: 1, padding: '7px', borderRadius: '6px', border: 'none', cursor: 'pointer',
+                fontFamily: 'var(--font-sans)', fontSize: '0.875rem', fontWeight: 500, transition: 'all 0.15s',
                 background: mode === m ? 'var(--bg-3)' : 'transparent',
                 color: mode === m ? 'var(--text)' : 'var(--text-2)',
               }}>
@@ -192,11 +259,8 @@ function SearchView({ onResults }: {
         <div className="card" style={{ padding: '24px' }}>
           <form onSubmit={mode === 'search' ? handleSearch : handleUpload}>
 
-            {/* Topic */}
             <div style={{ marginBottom: '16px' }}>
-              <label className="label">
-                {mode === 'search' ? 'Topic or keywords' : 'Topic label'}
-              </label>
+              <label className="label">{mode === 'search' ? 'Topic or keywords' : 'Topic label'}</label>
               <input
                 className={`input ${topicError ? 'error' : ''}`}
                 value={topic}
@@ -207,7 +271,6 @@ function SearchView({ onResults }: {
               {topicError && <p style={{ color: 'var(--error)', fontSize: '0.8125rem', marginTop: '4px' }}>{topicError}</p>}
             </div>
 
-            {/* Search-specific fields */}
             {mode === 'search' && (
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
@@ -233,7 +296,6 @@ function SearchView({ onResults }: {
               </>
             )}
 
-            {/* Upload-specific fields */}
             {mode === 'upload' && (
               <div style={{ marginBottom: '20px' }}>
                 <label className="label">PDF file</label>
@@ -241,24 +303,14 @@ function SearchView({ onResults }: {
                   onClick={() => fileRef.current?.click()}
                   style={{
                     border: `2px dashed ${file ? 'var(--accent)' : 'var(--border)'}`,
-                    borderRadius: 'var(--radius)',
-                    padding: '24px',
-                    textAlign: 'center',
-                    cursor: 'pointer',
-                    background: file ? 'var(--accent-glow)' : 'var(--bg)',
-                    transition: 'all 0.15s',
+                    borderRadius: 'var(--radius)', padding: '24px', textAlign: 'center',
+                    cursor: 'pointer', background: file ? 'var(--accent-glow)' : 'var(--bg)', transition: 'all 0.15s',
                   }}>
-                  <div style={{ color: file ? 'var(--accent)' : 'var(--text-3)', marginBottom: '4px' }}>
-                    <IconUpload />
-                  </div>
+                  <div style={{ color: file ? 'var(--accent)' : 'var(--text-3)', marginBottom: '4px' }}><IconUpload /></div>
                   <p style={{ fontSize: '0.875rem', color: file ? 'var(--text)' : 'var(--text-2)' }}>
                     {file ? file.name : 'Click to select a PDF'}
                   </p>
-                  {file && (
-                    <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: '2px' }}>
-                      {(file.size / 1024 / 1024).toFixed(1)} MB
-                    </p>
-                  )}
+                  {file && <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: '2px' }}>{(file.size / 1024 / 1024).toFixed(1)} MB</p>}
                 </div>
                 <input ref={fileRef} type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleFile} />
               </div>
@@ -267,9 +319,10 @@ function SearchView({ onResults }: {
             {error && <div className="notice notice-error" style={{ marginBottom: '16px' }}>{error}</div>}
 
             <button type="submit" className="btn btn-primary btn-full btn-lg" disabled={loading}>
-              {loading ? <><Spinner />{mode === 'search' ? 'Searching…' : 'Uploading…'}</> : (
-                <>{mode === 'search' ? <IconSearch /> : <IconUpload />}{mode === 'search' ? 'Search papers' : 'Upload & process'}</>
-              )}
+              {loading
+                ? <><Spinner />{mode === 'search' ? 'Searching…' : 'Uploading…'}</>
+                : <>{mode === 'search' ? <IconSearch /> : <IconUpload />}{mode === 'search' ? 'Search papers' : 'Upload & process'}</>
+              }
             </button>
           </form>
         </div>
@@ -298,13 +351,9 @@ function PaperCard({ paper }: { paper: PaperStatus }) {
           <p style={{ fontWeight: 500, fontSize: '0.9375rem', color: 'var(--text)', lineHeight: 1.4, marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
             {paper.title ?? paper.paper_id}
           </p>
-          {paper.sseMessage && (
-            <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', marginTop: '2px' }}>{paper.sseMessage}</p>
-          )}
+          {paper.sseMessage && <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', marginTop: '2px' }}>{paper.sseMessage}</p>}
           {stage.startsWith('failed') && paper.error_message && (
-            <p style={{ fontSize: '0.8125rem', color: 'var(--error)', marginTop: '4px' }}>
-              {paper.error_message}
-            </p>
+            <p style={{ fontSize: '0.8125rem', color: 'var(--error)', marginTop: '4px' }}>{paper.error_message}</p>
           )}
         </div>
         <span className={`badge ${stageClass(stage)}`} style={{ flexShrink: 0 }}>
@@ -316,14 +365,11 @@ function PaperCard({ paper }: { paper: PaperStatus }) {
   )
 }
 
-function ProcessingView({ papers, onDone }: {
-  papers: Paper[]
-  onDone: () => void
-}) {
+function ProcessingView({ papers, onDone }: { papers: Paper[]; onDone: () => void }) {
   const [statuses, setStatuses] = useState<Record<string, PaperStatus>>(
     () => Object.fromEntries(papers.map(p => [p.paper_id, { ...p }]))
   )
-  const esRefs = useRef<Record<string, EventSource>>({})
+  const esRefs  = useRef<Record<string, EventSource>>({})
   const doneRef = useRef(false)
 
   const update = useCallback((paperId: string, patch: Partial<PaperStatus>) => {
@@ -332,9 +378,6 @@ function ProcessingView({ papers, onDone }: {
 
   useEffect(() => {
     papers.forEach(paper => {
-      // FIX: Connect directly to the backend for SSE — not through /api/...
-      // Next.js dev server proxy buffers streamed responses, so SSE events
-      // never arrive in the browser when routed through the Next.js rewrite.
       const es = new EventSource(`${BACKEND}/api/papers/${paper.paper_id}/progress`)
       esRefs.current[paper.paper_id] = es
 
@@ -371,7 +414,6 @@ function ProcessingView({ papers, onDone }: {
     }
   }, [papers, update])
 
-  // Auto-advance when all papers are terminal
   useEffect(() => {
     if (doneRef.current) return
     const all = Object.values(statuses)
@@ -382,28 +424,20 @@ function ProcessingView({ papers, onDone }: {
     }
   }, [statuses, onDone])
 
-  const list = Object.values(statuses)
+  const list      = Object.values(statuses)
   const doneCount = list.filter(p => isTerminal(p.sseStage ?? p.pipeline_stage)).length
   const allDone   = doneCount === list.length
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 24px' }}>
       <div style={{ width: '100%', maxWidth: '640px' }}>
-
         <div style={{ marginBottom: '28px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
             <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>Processing papers</h2>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', color: 'var(--text-2)' }}>
-              {doneCount}/{list.length}
-            </span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', color: 'var(--text-2)' }}>{doneCount}/{list.length}</span>
           </div>
-          {/* Progress bar */}
           <div style={{ height: '3px', background: 'var(--border)', borderRadius: '2px', overflow: 'hidden' }}>
-            <div style={{
-              height: '100%', background: 'var(--accent)', borderRadius: '2px',
-              width: `${list.length ? (doneCount / list.length) * 100 : 0}%`,
-              transition: 'width 0.4s ease',
-            }} />
+            <div style={{ height: '100%', background: 'var(--accent)', borderRadius: '2px', width: `${list.length ? (doneCount / list.length) * 100 : 0}%`, transition: 'width 0.4s ease' }} />
           </div>
         </div>
 
@@ -439,27 +473,22 @@ function GenerationPanel({ paperId }: { paperId: string }) {
   const [shareLinks, setShareLinks]   = useState<{ linkedin_url: string; twitter_url: string } | null>(null)
   const esRef = useRef<EventSource | null>(null)
 
-  useEffect(() => {
-    setResult(null); setError(''); setExportUrl(''); setShareLinks(null)
-  }, [platform])
-
+  useEffect(() => { setResult(null); setError(''); setExportUrl(''); setShareLinks(null) }, [platform])
   useEffect(() => () => { esRef.current?.close() }, [])
 
   async function handleGenerate() {
     setLoading(true); setError(''); setResult(null); setExportUrl(''); setShareLinks(null)
     try {
       const res = await generateContent({ paper_id: paperId, platform, style, tone, color_scheme: colorScheme })
-      const qk = res.queue_key
+      const qk  = res.queue_key
 
       await new Promise<void>((resolve, reject) => {
-        // FIX: Connect SSE directly to backend, not through Next.js proxy
         const es = new EventSource(`${BACKEND}/api/generate/${qk}/progress`)
         esRef.current = es
 
-        es.addEventListener('completed', async (e: MessageEvent) => {
+        es.addEventListener('completed', async () => {
           try {
-            const data = JSON.parse(e.data)
-            const hist = await generationHistory(paperId, platform)
+            const hist   = await generationHistory(paperId, platform)
             const latest = hist.items[0] ?? null
             setResult(latest)
             if (latest) {
@@ -472,20 +501,15 @@ function GenerationPanel({ paperId }: { paperId: string }) {
         es.addEventListener('done', (e: MessageEvent) => {
           try {
             const data = JSON.parse(e.data)
-            if (!data.success && data.error) {
-              reject(new Error(data.error))
-            } else {
-              resolve()
-            }
+            if (!data.success && data.error) reject(new Error(data.error))
+            else resolve()
           } catch { resolve() }
           es.close()
         })
 
         es.addEventListener('failed', (e: MessageEvent) => {
-          try {
-            const data = JSON.parse(e.data)
-            reject(new Error(data.error ?? 'Generation failed'))
-          } catch { reject(new Error('Generation failed')) }
+          try { reject(new Error(JSON.parse(e.data).error ?? 'Generation failed')) }
+          catch { reject(new Error('Generation failed')) }
           es.close()
         })
 
@@ -493,9 +517,7 @@ function GenerationPanel({ paperId }: { paperId: string }) {
       })
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Generation failed.')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
   async function handleExport() {
@@ -506,9 +528,7 @@ function GenerationPanel({ paperId }: { paperId: string }) {
       setExportUrl(`/api/generate/${result.id}/download?filename=${encodeURIComponent(res.filename)}`)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Export failed.')
-    } finally {
-      setExporting(false)
-    }
+    } finally { setExporting(false) }
   }
 
   function renderPreview() {
@@ -520,15 +540,12 @@ function GenerationPanel({ paperId }: { paperId: string }) {
           <div>
             {tweets.map((t, i) => (
               <div key={i} style={{ padding: '10px 12px', borderBottom: i < tweets.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '0.875rem', lineHeight: 1.6 }}>
-                <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', marginRight: '8px' }}>{i + 1}</span>
-                {t}
+                <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', marginRight: '8px' }}>{i + 1}</span>{t}
               </div>
             ))}
             {result.hashtags?.length > 0 && (
               <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {result.hashtags.map(h => (
-                  <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', background: 'var(--accent-glow)', padding: '2px 8px', borderRadius: '12px' }}>{h}</span>
-                ))}
+                {result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', background: 'var(--accent-glow)', padding: '2px 8px', borderRadius: '12px' }}>{h}</span>)}
               </div>
             )}
           </div>
@@ -540,9 +557,7 @@ function GenerationPanel({ paperId }: { paperId: string }) {
             {result.content}
             {result.hashtags?.length > 0 && (
               <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {result.hashtags.map(h => (
-                  <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>{h}</span>
-                ))}
+                {result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>{h}</span>)}
               </div>
             )}
           </div>
@@ -571,45 +586,27 @@ function GenerationPanel({ paperId }: { paperId: string }) {
 
   return (
     <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
-      <p style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-2)', marginBottom: '14px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        Generate content
-      </p>
+      <p style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-2)', marginBottom: '14px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generate content</p>
 
-      {/* Platform selector */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
         {(['twitter', 'linkedin', 'carousel'] as Platform[]).map(p => (
           <button key={p} onClick={() => setPlatform(p)}
-            style={{
-              flex: 1, padding: '6px', borderRadius: 'var(--radius)', border: `1px solid ${platform === p ? 'var(--accent)' : 'var(--border)'}`,
-              background: platform === p ? 'var(--accent-glow)' : 'transparent',
-              color: platform === p ? 'var(--accent)' : 'var(--text-2)',
-              fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', cursor: 'pointer', transition: 'all 0.15s', fontWeight: 500,
-            }}>
+            style={{ flex: 1, padding: '6px', borderRadius: 'var(--radius)', border: `1px solid ${platform === p ? 'var(--accent)' : 'var(--border)'}`, background: platform === p ? 'var(--accent-glow)' : 'transparent', color: platform === p ? 'var(--accent)' : 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', cursor: 'pointer', transition: 'all 0.15s', fontWeight: 500 }}>
             {p.charAt(0).toUpperCase() + p.slice(1)}
           </button>
         ))}
       </div>
 
-      {/* Style / Tone */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-        <div>
-          <label className="label">Style</label>
-          <input className="input" value={style} onChange={e => setStyle(e.target.value)} placeholder="e.g. educational" />
-        </div>
-        <div>
-          <label className="label">Tone</label>
-          <input className="input" value={tone} onChange={e => setTone(e.target.value)} placeholder="e.g. conversational" />
-        </div>
+        <div><label className="label">Style</label><input className="input" value={style} onChange={e => setStyle(e.target.value)} placeholder="e.g. educational" /></div>
+        <div><label className="label">Tone</label><input className="input" value={tone} onChange={e => setTone(e.target.value)} placeholder="e.g. conversational" /></div>
       </div>
 
-      {/* Color scheme (carousel only) */}
       {platform === 'carousel' && (
         <div style={{ marginBottom: '10px' }}>
           <label className="label">Color scheme</label>
           <select className="select" value={colorScheme} onChange={e => setColorScheme(e.target.value)}>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-            <option value="bold">Bold</option>
+            <option value="light">Light</option><option value="dark">Dark</option><option value="bold">Bold</option>
           </select>
         </div>
       )}
@@ -620,19 +617,15 @@ function GenerationPanel({ paperId }: { paperId: string }) {
         {loading ? <><Spinner />Generating…</> : 'Generate'}
       </button>
 
-      {/* Preview */}
       {result && (
         <div className="fade-in" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', marginBottom: '10px' }}>
-          <div style={{ background: 'var(--bg-3)', padding: '8px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ background: 'var(--bg-3)', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
             <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-2)' }}>Preview</span>
           </div>
-          <div style={{ background: 'var(--bg-2)', maxHeight: '320px', overflowY: 'auto' }}>
-            {renderPreview()}
-          </div>
+          <div style={{ background: 'var(--bg-2)', maxHeight: '320px', overflowY: 'auto' }}>{renderPreview()}</div>
         </div>
       )}
 
-      {/* Actions */}
       {result && (
         <div className="fade-in" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {platform === 'carousel' && (
@@ -640,19 +633,11 @@ function GenerationPanel({ paperId }: { paperId: string }) {
               {exporting ? <><Spinner size="spinner-sm" />Exporting…</> : <><IconDownload />Export PDF</>}
             </button>
           )}
-          {exportUrl && (
-            <a href={exportUrl} download className="btn btn-ghost btn-sm">
-              <IconDownload />Download PDF
-            </a>
-          )}
+          {exportUrl && <a href={exportUrl} download className="btn btn-ghost btn-sm"><IconDownload />Download PDF</a>}
           {shareLinks && (
             <>
-              <a href={shareLinks.linkedin_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm">
-                <IconShare />LinkedIn
-              </a>
-              <a href={shareLinks.twitter_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm">
-                <IconShare />Twitter/X
-              </a>
+              <a href={shareLinks.linkedin_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />LinkedIn</a>
+              <a href={shareLinks.twitter_url}  target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />Twitter/X</a>
             </>
           )}
         </div>
@@ -662,13 +647,10 @@ function GenerationPanel({ paperId }: { paperId: string }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VIEW 3: Chat — main view
+// VIEW 3: Chat
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ChatView({ initialPapers, onNewSearch }: {
-  initialPapers: Paper[]
-  onNewSearch: () => void
-}) {
+function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNewSearch: () => void }) {
   const [sessions, setSessions]           = useState<Session[]>([])
   const [activeSession, setActiveSession] = useState<SessionDetail | null>(null)
   const [messages, setMessages]           = useState<Message[]>([])
@@ -682,17 +664,13 @@ function ChatView({ initialPapers, onNewSearch }: {
   )
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    loadSessions()
-  }, [])
+  useEffect(() => { loadSessions() }, [])
 
   async function loadSessions() {
     try {
       const res = await listSessions()
       setSessions(res.sessions)
-      if (res.sessions.length > 0 && !activeSession) {
-        await openSession(res.sessions[0].session_id)
-      }
+      if (res.sessions.length > 0 && !activeSession) await openSession(res.sessions[0].session_id)
     } catch { /* non-critical */ }
   }
 
@@ -710,17 +688,13 @@ function ChatView({ initialPapers, onNewSearch }: {
     }
   }
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault()
     if (!input.trim() || !activeSession || sending) return
     const text = input.trim()
-    setInput('')
-    setChatError('')
-    setSending(true)
+    setInput(''); setChatError(''); setSending(true)
 
     const tempMsg: Message = { id: Date.now(), role: 'user', content: text, level, created_at: null }
     setMessages(prev => [...prev, tempMsg])
@@ -733,9 +707,7 @@ function ChatView({ initialPapers, onNewSearch }: {
       setChatError(err instanceof Error ? err.message : 'Message failed.')
       setMessages(prev => prev.filter(m => m.id !== tempMsg.id))
       setInput(text)
-    } finally {
-      setSending(false)
-    }
+    } finally { setSending(false) }
   }
 
   async function handleLevelChange(newLevel: Level) {
@@ -747,78 +719,47 @@ function ChatView({ initialPapers, onNewSearch }: {
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-
-      {/* ── Sidebar ── */}
       <div style={{ width: '260px', flexShrink: 0, background: 'var(--bg-2)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ padding: '16px', borderBottom: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
             <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', flexShrink: 0 }} />
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', letterSpacing: '0.08em' }}>RESEARCHRAG</span>
           </div>
-          <button className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>
-            + New search
-          </button>
+          <button className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>+ New search</button>
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
           {sessError && <div className="notice notice-error" style={{ margin: '8px' }}>{sessError}</div>}
-          {sessions.length === 0 && (
-            <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', padding: '12px 8px', textAlign: 'center' }}>No sessions yet</p>
-          )}
+          {sessions.length === 0 && <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', padding: '12px 8px', textAlign: 'center' }}>No sessions yet</p>}
           {sessions.map(s => (
             <button key={s.session_id} onClick={() => openSession(s.session_id)}
-              style={{
-                width: '100%', textAlign: 'left', padding: '10px 10px',
-                borderRadius: 'var(--radius)', border: 'none', cursor: 'pointer',
-                background: activeSession?.session_id === s.session_id ? 'var(--bg-3)' : 'transparent',
-                color: activeSession?.session_id === s.session_id ? 'var(--text)' : 'var(--text-2)',
-                marginBottom: '2px', transition: 'all 0.12s',
-              }}>
-              <p style={{ fontSize: '0.875rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '2px' }}>
-                {s.topic ?? s.session_id}
-              </p>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>
-                {s.level}
-              </p>
+              style={{ width: '100%', textAlign: 'left', padding: '10px', borderRadius: 'var(--radius)', border: 'none', cursor: 'pointer', background: activeSession?.session_id === s.session_id ? 'var(--bg-3)' : 'transparent', color: activeSession?.session_id === s.session_id ? 'var(--text)' : 'var(--text-2)', marginBottom: '2px', transition: 'all 0.12s' }}>
+              <p style={{ fontSize: '0.875rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '2px' }}>{s.topic ?? s.session_id}</p>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{s.level}</p>
             </button>
           ))}
         </div>
       </div>
 
-      {/* ── Main chat + generation panel ── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-
-        {/* Chat header */}
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', flexShrink: 0 }}>
           <div>
             <p style={{ fontWeight: 600, fontSize: '0.9375rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '400px' }}>
               {activeSession?.topic ?? activePaper?.title ?? 'Select a session'}
             </p>
-            {activePaper && (
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-                {activePaper.source} · {activePaper.chunk_count} chunks
-              </p>
-            )}
+            {activePaper && <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{activePaper.source} · {activePaper.chunk_count} chunks</p>}
           </div>
           <div style={{ display: 'flex', gap: '4px' }}>
             {(['beginner', 'intermediate', 'advanced'] as Level[]).map(l => (
               <button key={l} onClick={() => handleLevelChange(l)}
-                style={{
-                  padding: '4px 10px', borderRadius: '20px', border: `1px solid ${level === l ? 'var(--accent)' : 'var(--border)'}`,
-                  background: level === l ? 'var(--accent-glow)' : 'transparent',
-                  color: level === l ? 'var(--accent)' : 'var(--text-3)',
-                  fontFamily: 'var(--font-sans)', fontSize: '0.75rem', cursor: 'pointer', transition: 'all 0.12s', fontWeight: 500,
-                }}>
+                style={{ padding: '4px 10px', borderRadius: '20px', border: `1px solid ${level === l ? 'var(--accent)' : 'var(--border)'}`, background: level === l ? 'var(--accent-glow)' : 'transparent', color: level === l ? 'var(--accent)' : 'var(--text-3)', fontFamily: 'var(--font-sans)', fontSize: '0.75rem', cursor: 'pointer', transition: 'all 0.12s', fontWeight: 500 }}>
                 {l.charAt(0).toUpperCase() + l.slice(1)}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Two-column: messages + generation */}
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-
-          {/* Messages area */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
               {!activeSession && (
@@ -829,18 +770,8 @@ function ChatView({ initialPapers, onNewSearch }: {
                 </div>
               )}
               {messages.map((msg, i) => (
-                <div key={msg.id ?? i} className="fade-in" style={{
-                  display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                  marginBottom: '14px',
-                }}>
-                  <div style={{
-                    maxWidth: '72%', padding: '10px 14px', borderRadius: 'var(--radius-lg)',
-                    background: msg.role === 'user' ? 'var(--accent)' : 'var(--bg-3)',
-                    color: msg.role === 'user' ? '#fff' : 'var(--text)',
-                    fontSize: '0.9rem', lineHeight: 1.6,
-                    borderBottomRightRadius: msg.role === 'user' ? '4px' : undefined,
-                    borderBottomLeftRadius:  msg.role === 'assistant' ? '4px' : undefined,
-                  }}>
+                <div key={msg.id ?? i} className="fade-in" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: '14px' }}>
+                  <div style={{ maxWidth: '72%', padding: '10px 14px', borderRadius: 'var(--radius-lg)', background: msg.role === 'user' ? 'var(--accent)' : 'var(--bg-3)', color: msg.role === 'user' ? '#fff' : 'var(--text)', fontSize: '0.9rem', lineHeight: 1.6, borderBottomRightRadius: msg.role === 'user' ? '4px' : undefined, borderBottomLeftRadius: msg.role === 'assistant' ? '4px' : undefined }}>
                     {msg.content}
                   </div>
                 </div>
@@ -856,37 +787,19 @@ function ChatView({ initialPapers, onNewSearch }: {
               <div ref={bottomRef} />
             </div>
 
-            {/* Input bar */}
             <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--bg-2)', flexShrink: 0 }}>
               {chatError && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{chatError}</div>}
               <form onSubmit={handleSend} style={{ display: 'flex', gap: '8px' }}>
-                <input
-                  className="input"
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  placeholder={activeSession ? 'Ask anything about this paper…' : 'Waiting for a session…'}
-                  disabled={!activeSession || sending}
-                  maxLength={2000}
-                  style={{ flex: 1 }}
-                />
-                <button type="submit" className="btn btn-primary" disabled={!activeSession || !input.trim() || sending} style={{ flexShrink: 0 }}>
-                  <IconSend />
-                </button>
+                <input className="input" value={input} onChange={e => setInput(e.target.value)} placeholder={activeSession ? 'Ask anything about this paper…' : 'Waiting for a session…'} disabled={!activeSession || sending} maxLength={2000} style={{ flex: 1 }} />
+                <button type="submit" className="btn btn-primary" disabled={!activeSession || !input.trim() || sending} style={{ flexShrink: 0 }}><IconSend /></button>
               </form>
             </div>
           </div>
 
-          {/* Generation panel (right sidebar) */}
           <div style={{ width: '300px', flexShrink: 0, borderLeft: '1px solid var(--border)', overflowY: 'auto', padding: '16px', background: 'var(--bg)' }}>
             {activePaper && activePaper.pipeline_stage === 'processed'
               ? <GenerationPanel paperId={activePaper.paper_id} />
-              : (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100px' }}>
-                  <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', textAlign: 'center' }}>
-                    Paper must be processed<br />to generate content
-                  </p>
-                </div>
-              )
+              : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100px' }}><p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', textAlign: 'center' }}>Paper must be processed<br />to generate content</p></div>
             }
           </div>
         </div>
@@ -903,19 +816,9 @@ export default function App() {
   const [view, setView]     = useState<View>('search')
   const [papers, setPapers] = useState<Paper[]>([])
 
-  function handleSearchResults(results: Paper[]) {
-    setPapers(results)
-    setView('processing')
-  }
-
-  function handleProcessingDone() {
-    setView('chat')
-  }
-
-  function handleNewSearch() {
-    setPapers([])
-    setView('search')
-  }
+  function handleSearchResults(results: Paper[]) { setPapers(results); setView('processing') }
+  function handleProcessingDone() { setView('chat') }
+  function handleNewSearch() { setPapers([]); setView('search') }
 
   return (
     <>

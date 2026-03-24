@@ -75,6 +75,21 @@ export interface SocialItem {
   created_at:   string | null
 }
 
+export interface ModelOption {
+  id:          string
+  name:        string
+  provider:    string
+  description: string
+  recommended: boolean
+  active:      boolean
+}
+
+export interface ModelsResponse {
+  provider:     string
+  active_model: string
+  models:       ModelOption[]
+}
+
 // ── Papers ───────────────────────────────────────────────────────────────────
 
 export async function searchPapers(params: {
@@ -152,6 +167,21 @@ export async function updateLevel(
   return request(`/chat/sessions/${sessionId}/level`, {
     method: 'PATCH',
     body: JSON.stringify({ level }),
+  })
+}
+
+// ── Models ───────────────────────────────────────────────────────────────────
+
+export async function getModels(): Promise<ModelsResponse> {
+  return request('/models')
+}
+
+export async function selectModel(
+  modelId: string
+): Promise<{ success: boolean; active_model: string; message: string }> {
+  return request('/models/select', {
+    method: 'POST',
+    body: JSON.stringify({ model_id: modelId }),
   })
 }
 
