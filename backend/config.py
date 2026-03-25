@@ -11,7 +11,9 @@ _DEFAULT_MODELS = {
     "openai":     "gpt-4o-mini",
     "gemini":     "gemini-2.0-flash",
     "anthropic":  "claude-sonnet-4-20250514",
-    "openrouter": "meta-llama/llama-3.3-70b-instruct:free",
+    # Qwen 2.5 72B is the default for OpenRouter — less rate-limited than
+    # Llama 3.3 70B which is heavily contested on the free tier.
+    "openrouter": "qwen/qwen-2.5-72b-instruct:free",
 }
 
 # Valid providers — checked in validate()
@@ -19,13 +21,21 @@ _VALID_PROVIDERS = {"openai", "gemini", "anthropic", "openrouter"}
 
 # Curated list of free OpenRouter models tested with this codebase.
 # Exposed via GET /api/models when LLM_PROVIDER=openrouter.
+# Listed in recommended order — least rate-limited first.
 AVAILABLE_MODELS = [
+    {
+        "id":          "qwen/qwen-2.5-72b-instruct:free",
+        "name":        "Qwen 2.5 72B",
+        "provider":    "Alibaba",
+        "description": "Strong reasoning and JSON output. Less rate-limited than Llama.",
+        "recommended": True,
+    },
     {
         "id":          "meta-llama/llama-3.3-70b-instruct:free",
         "name":        "Llama 3.3 70B",
         "provider":    "Meta",
-        "description": "Best quality. Strong reasoning and JSON output.",
-        "recommended": True,
+        "description": "Excellent quality. May be rate-limited during peak hours.",
+        "recommended": False,
     },
     {
         "id":          "google/gemini-2.0-flash-exp:free",
@@ -39,13 +49,6 @@ AVAILABLE_MODELS = [
         "name":        "Mistral 7B",
         "provider":    "Mistral",
         "description": "Lightweight and fast. May occasionally miss JSON structure.",
-        "recommended": False,
-    },
-    {
-        "id":          "qwen/qwen-2.5-72b-instruct:free",
-        "name":        "Qwen 2.5 72B",
-        "provider":    "Alibaba",
-        "description": "Strong alternative to Llama. Good multilingual support.",
         "recommended": False,
     },
 ]

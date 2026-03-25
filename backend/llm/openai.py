@@ -97,9 +97,15 @@ Create 6-8 slides. Keep each slide concise. No markdown, no extra text."""
 
 class OpenAIProvider(LLMProvider):
     def __init__(self):
-        # Pass base_url when set — this enables OpenRouter and other
-        # OpenAI-compatible providers without any other code changes.
-        client_kwargs = {"api_key": cfg.LLM_API_KEY}
+        client_kwargs: dict = {
+            "api_key":     cfg.LLM_API_KEY,
+            # FIX: Disable the SDK's built-in retry entirely.
+            # When using OpenRouter free tier, the SDK's internal retry fires
+            # multiple times before our own retry loop runs, multiplying total
+            # attempts to 9 (3 SDK × 3 ours) and burning through the rate limit
+            # much faster. Our _with_retry() already handles retries correctly.
+            "max_retries": 0,
+        }
         if cfg.LLM_BASE_URL:
             client_kwargs["base_url"] = cfg.LLM_BASE_URL
             logger.info("OpenAI client using base_url: %s", cfg.LLM_BASE_URL)
@@ -116,7 +122,12 @@ class OpenAIProvider(LLMProvider):
         return response.choices[0].message.content or ""
 
     async def _with_retry(self, messages: list[dict]) -> str:
-        """Run the blocking call in executor with retry on transient errors."""
+        """
+        Run the blocking call in executor with exponential backoff retry.
+
+        On 429 from OpenRouter free tier, waits longer between attempts to
+        respect the upstream rate limit window (typically 1 minute).
+        """
         loop = asyncio.get_running_loop()
         last_exc = None
         for attempt in range(1, cfg.MAX_RETRIES + 1):
@@ -125,11 +136,18 @@ class OpenAIProvider(LLMProvider):
             except Exception as exc:
                 last_exc = exc
                 if attempt < cfg.MAX_RETRIES:
-                    wait = 2 ** attempt
-                    logger.warning("OpenAI attempt %d/%d failed: %s — retrying in %ds",
-                                   attempt, cfg.MAX_RETRIES, exc, wait)
+                    # Use a longer wait for 429s — OpenRouter free tier rate
+                    # limit windows are typically 60 seconds.
+                    error_str = str(exc)
+                    wait = 15 if "429" in error_str else 2 ** attempt
+                    logger.warning(
+                        "OpenAI attempt %d/%d failed: %s — retrying in %ds",
+                        attempt, cfg.MAX_RETRIES, exc, wait,
+                    )
                     await asyncio.sleep(wait)
-        raise RuntimeError(f"OpenAI call failed after {cfg.MAX_RETRIES} attempts: {last_exc}") from last_exc
+        raise RuntimeError(
+            f"OpenAI call failed after {cfg.MAX_RETRIES} attempts: {last_exc}"
+        ) from last_exc
 
     def _build_messages(self, user_prompt: str, history: list[dict] | None = None) -> list[dict]:
         """Build the messages array with system prompt, history, and user message."""
@@ -158,8 +176,7 @@ class OpenAIProvider(LLMProvider):
         prompt = _TWITTER_PROMPT.format(
             title=title, style=style, tone=tone, context=safe_context
         )
-        messages = self._build_messages(prompt)
-        raw = await self._with_retry(messages)
+        raw = await self._with_retry(self._build_messages(prompt))
         return parse_json_response(raw)
 
     async def generate_linkedin_post(self, context, title, style, tone) -> dict:
@@ -167,8 +184,7 @@ class OpenAIProvider(LLMProvider):
         prompt = _LINKEDIN_PROMPT.format(
             title=title, style=style, tone=tone, context=safe_context
         )
-        messages = self._build_messages(prompt)
-        raw = await self._with_retry(messages)
+        raw = await self._with_retry(self._build_messages(prompt))
         return parse_json_response(raw)
 
     async def generate_carousel_content(self, context, title, style, tone, color_scheme) -> dict:
@@ -177,6 +193,5 @@ class OpenAIProvider(LLMProvider):
             title=title, style=style, tone=tone,
             color_scheme=color_scheme, context=safe_context
         )
-        messages = self._build_messages(prompt)
-        raw = await self._with_retry(messages)
+        raw = await self._with_retry(self._build_messages(prompt))
         return parse_json_response(raw)
