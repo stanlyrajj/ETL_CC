@@ -3,6 +3,13 @@ factory.py — Returns the correct LLMProvider instance based on LLM_PROVIDER co
 
 Lazy initialization: the provider is created on first call, not at import time.
 set_model() allows switching the active model at runtime without restarting.
+
+Supported providers:
+  openai      — OpenAI API directly
+  anthropic   — Anthropic API directly
+  gemini      — Google Gemini API directly
+  groq        — Groq API (OpenAI-compatible, set LLM_BASE_URL=https://api.groq.com/openai/v1)
+  openrouter  — OpenRouter API (OpenAI-compatible, set LLM_BASE_URL=https://openrouter.ai/api/v1)
 """
 
 import logging
@@ -12,7 +19,7 @@ from llm.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_PROVIDERS = ("openai", "gemini", "anthropic", "openrouter")
+_SUPPORTED_PROVIDERS = ("openai", "gemini", "anthropic", "groq", "openrouter")
 
 # Module-level cache — created once on first call to get_provider()
 _instance: LLMProvider | None = None
@@ -43,8 +50,11 @@ def get_provider() -> LLMProvider:
         from llm.anthropic import AnthropicProvider
         _instance = AnthropicProvider()
 
-    elif provider == "openrouter":
-        # OpenRouter is OpenAI-compatible — reuse OpenAIProvider with base_url set
+    elif provider in ("groq", "openrouter"):
+        # Both Groq and OpenRouter are OpenAI-compatible — reuse OpenAIProvider
+        # with the appropriate base_url set in config.
+        # Groq:       LLM_BASE_URL=https://api.groq.com/openai/v1
+        # OpenRouter: LLM_BASE_URL=https://openrouter.ai/api/v1
         from llm.openai import OpenAIProvider
         _instance = OpenAIProvider()
 

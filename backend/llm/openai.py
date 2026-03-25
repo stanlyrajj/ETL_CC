@@ -99,11 +99,11 @@ class OpenAIProvider(LLMProvider):
     def __init__(self):
         client_kwargs: dict = {
             "api_key":     cfg.LLM_API_KEY,
-            # FIX: Disable the SDK's built-in retry entirely.
+            # Disable the SDK's built-in retry entirely.
             # When using OpenRouter free tier, the SDK's internal retry fires
             # multiple times before our own retry loop runs, multiplying total
-            # attempts to 9 (3 SDK × 3 ours) and burning through the rate limit
-            # much faster. Our _with_retry() already handles retries correctly.
+            # attempts and burning through the rate limit faster.
+            # Our _with_retry() already handles retries correctly.
             "max_retries": 0,
         }
         if cfg.LLM_BASE_URL:
@@ -125,8 +125,9 @@ class OpenAIProvider(LLMProvider):
         """
         Run the blocking call in executor with exponential backoff retry.
 
-        On 429 from OpenRouter free tier, waits longer between attempts to
-        respect the upstream rate limit window (typically 1 minute).
+        On 429 from OpenRouter free tier, waits 60 seconds between attempts
+        to respect the upstream rate limit window (typically 60 seconds).
+        On other transient errors, uses standard exponential backoff.
         """
         loop = asyncio.get_running_loop()
         last_exc = None
@@ -136,10 +137,11 @@ class OpenAIProvider(LLMProvider):
             except Exception as exc:
                 last_exc = exc
                 if attempt < cfg.MAX_RETRIES:
-                    # Use a longer wait for 429s — OpenRouter free tier rate
-                    # limit windows are typically 60 seconds.
                     error_str = str(exc)
-                    wait = 15 if "429" in error_str else 2 ** attempt
+                    # OpenRouter free tier rate limit windows are ~60 seconds.
+                    # A 15s wait was not enough — all 3 retries hit the same
+                    # rate limit window and failed. 60s clears it reliably.
+                    wait = 60 if "429" in error_str else 2 ** attempt
                     logger.warning(
                         "OpenAI attempt %d/%d failed: %s — retrying in %ds",
                         attempt, cfg.MAX_RETRIES, exc, wait,

@@ -9,46 +9,48 @@ load_dotenv(Path(__file__).parent / ".env")
 # Default models per provider
 _DEFAULT_MODELS = {
     "openai":     "gpt-4o-mini",
-    "gemini":     "gemini-2.0-flash",
+    "gemini":     "gemini-2.5-flash",
     "anthropic":  "claude-sonnet-4-20250514",
-    # Qwen 2.5 72B is the default for OpenRouter — less rate-limited than
-    # Llama 3.3 70B which is heavily contested on the free tier.
-    "openrouter": "qwen/qwen-2.5-72b-instruct:free",
+    # Groq: Llama 3.3 70B on Groq's own LPU hardware — reliable free tier,
+    # no upstream provider failures, fastest inference available.
+    "groq":       "llama-3.3-70b-versatile",
+    # OpenRouter: kept for reference but Groq is preferred for free usage.
+    "openrouter": "meta-llama/llama-3.3-70b-instruct:free",
 }
 
 # Valid providers — checked in validate()
-_VALID_PROVIDERS = {"openai", "gemini", "anthropic", "openrouter"}
+_VALID_PROVIDERS = {"openai", "gemini", "anthropic", "openrouter", "groq"}
 
-# Curated list of free OpenRouter models tested with this codebase.
+# Curated list of free OpenRouter models.
 # Exposed via GET /api/models when LLM_PROVIDER=openrouter.
-# Listed in recommended order — least rate-limited first.
+# Listed in recommended order — most reliable first.
 AVAILABLE_MODELS = [
-    {
-        "id":          "qwen/qwen-2.5-72b-instruct:free",
-        "name":        "Qwen 2.5 72B",
-        "provider":    "Alibaba",
-        "description": "Strong reasoning and JSON output. Less rate-limited than Llama.",
-        "recommended": True,
-    },
     {
         "id":          "meta-llama/llama-3.3-70b-instruct:free",
         "name":        "Llama 3.3 70B",
         "provider":    "Meta",
-        "description": "Excellent quality. May be rate-limited during peak hours.",
+        "description": "GPT-4 level quality. The most reliable free model on OpenRouter.",
+        "recommended": True,
+    },
+    {
+        "id":          "deepseek/deepseek-chat:free",
+        "name":        "DeepSeek V3",
+        "provider":    "DeepSeek",
+        "description": "Excellent general-purpose model. Strong JSON output.",
         "recommended": False,
     },
     {
-        "id":          "google/gemini-2.0-flash-exp:free",
-        "name":        "Gemini 2.0 Flash (free)",
-        "provider":    "Google",
-        "description": "Fast and capable. Good for chat and generation.",
+        "id":          "deepseek/deepseek-r1:free",
+        "name":        "DeepSeek R1",
+        "provider":    "DeepSeek",
+        "description": "Reasoning-focused model. Best for complex analytical questions.",
         "recommended": False,
     },
     {
-        "id":          "mistralai/mistral-7b-instruct:free",
-        "name":        "Mistral 7B",
+        "id":          "mistralai/mistral-small-3.1-24b-instruct:free",
+        "name":        "Mistral Small 3.1 24B",
         "provider":    "Mistral",
-        "description": "Lightweight and fast. May occasionally miss JSON structure.",
+        "description": "Fast and lightweight. Good for simple chat and generation tasks.",
         "recommended": False,
     },
 ]
@@ -86,7 +88,8 @@ class Config:
 
         # ── LLM base URL ──────────────────────────────────────────────────────
         # Leave unset for direct provider access (OpenAI, Gemini, Anthropic).
-        # Required when LLM_PROVIDER=openrouter: set to https://openrouter.ai/api/v1
+        # Required when LLM_PROVIDER=openrouter: https://openrouter.ai/api/v1
+        # Required when LLM_PROVIDER=groq:       https://api.groq.com/openai/v1
         self.LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "")
 
         # ── Database ──────────────────────────────────────────────────────────
@@ -144,10 +147,15 @@ class Config:
                 f"{self.LLM_PROVIDER!r}. Set LLM_MODEL explicitly in your .env file."
             )
 
-        if self.LLM_PROVIDER.lower() == "openrouter" and not self.LLM_BASE_URL:
+        # LLM_BASE_URL is required for both openrouter and groq
+        if self.LLM_PROVIDER.lower() in ("openrouter", "groq") and not self.LLM_BASE_URL:
+            base_url_hint = {
+                "openrouter": "https://openrouter.ai/api/v1",
+                "groq":       "https://api.groq.com/openai/v1",
+            }[self.LLM_PROVIDER.lower()]
             errors.append(
-                "LLM_BASE_URL is required when LLM_PROVIDER=openrouter. "
-                "Set it to: https://openrouter.ai/api/v1"
+                f"LLM_BASE_URL is required when LLM_PROVIDER={self.LLM_PROVIDER!r}. "
+                f"Set it to: {base_url_hint}"
             )
 
         if self.CHUNK_OVERLAP >= self.CHUNK_SIZE:
