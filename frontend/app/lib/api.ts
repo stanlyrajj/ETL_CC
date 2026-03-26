@@ -29,6 +29,22 @@ export type PipelineStage =
   | 'processing' | 'processed'
   | 'failed_download' | 'failed_processing'
 
+// Lightweight preview returned by POST /papers/search (before pipeline starts)
+export interface PaperPreview {
+  paper_id:   string
+  source:     string          // "arxiv" | "pubmed"
+  title:      string
+  abstract:   string
+  authors:    string[]
+  url:        string
+  has_pdf:    boolean         // false for PubMed abstract-only
+  published:  string
+  journal:    string
+  categories: string[]
+  doi:        string
+}
+
+// Full paper record returned after pipeline starts (POST /papers/process)
 export interface Paper {
   paper_id:       string
   source:         string
@@ -92,15 +108,32 @@ export interface ModelsResponse {
 
 // ── Papers ───────────────────────────────────────────────────────────────────
 
-export async function searchPapers(params: {
-  topic: string
-  limit: number
-  source: 'arxiv' | 'pubmed' | 'both'
+export interface SearchParams {
+  topic:     string
+  limit:     number
+  source:    'arxiv' | 'pubmed' | 'both'
+  sort_by?:  'date' | 'relevance'
   date_from?: string
-}): Promise<{ papers: Paper[]; message: string }> {
+  date_to?:   string
+  category?:  string    // arXiv category code e.g. "cs.LG"
+  keyword?:   string    // must-include term
+}
+
+export async function searchPapers(
+  params: SearchParams
+): Promise<{ papers: PaperPreview[]; message: string }> {
   return request('/papers/search', {
     method: 'POST',
     body: JSON.stringify(params),
+  })
+}
+
+export async function processPapers(
+  paperIds: string[]
+): Promise<{ papers: Paper[]; message: string }> {
+  return request('/papers/process', {
+    method: 'POST',
+    body: JSON.stringify({ paper_ids: paperIds }),
   })
 }
 

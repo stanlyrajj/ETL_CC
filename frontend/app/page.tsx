@@ -2,16 +2,16 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
-  searchPapers, uploadPaper, listSessions, getSession, listPapers,
+  searchPapers, processPapers, uploadPaper, listSessions, getSession, listPapers,
   sendMessage, updateLevel, generateContent, generationHistory,
   exportCarousel, getShareLinks, getModels, selectModel,
-  type Paper, type Session, type SessionDetail, type Message,
-  type SocialItem, type ModelOption,
+  type Paper, type PaperPreview, type Session, type SessionDetail,
+  type Message, type SocialItem, type ModelOption,
 } from './lib/api'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type View = 'search' | 'processing' | 'chat'
+type View = 'search' | 'selection' | 'processing' | 'chat'
 type Level = 'beginner' | 'intermediate' | 'advanced'
 type Platform = 'twitter' | 'linkedin' | 'carousel'
 
@@ -20,8 +20,36 @@ interface PaperStatus extends Paper {
   sseMessage?: string
 }
 
-// Direct backend URL for SSE — bypasses Next.js proxy buffering
 const BACKEND = 'http://localhost:8000'
+
+// ── arXiv category options (full names → codes) ───────────────────────────────
+const ARXIV_CATEGORIES = [
+  { label: 'All Categories',                   value: '' },
+  { label: '── Computer Science ──',           value: '', disabled: true },
+  { label: 'Artificial Intelligence',          value: 'cs.AI' },
+  { label: 'Machine Learning',                 value: 'cs.LG' },
+  { label: 'Computation and Language (NLP)',   value: 'cs.CL' },
+  { label: 'Computer Vision',                  value: 'cs.CV' },
+  { label: 'Robotics',                         value: 'cs.RO' },
+  { label: 'Human-Computer Interaction',       value: 'cs.HC' },
+  { label: 'Information Retrieval',            value: 'cs.IR' },
+  { label: 'Neural and Evolutionary Computing',value: 'cs.NE' },
+  { label: '── Biology & Medicine ──',         value: '', disabled: true },
+  { label: 'Biomolecules',                     value: 'q-bio.BM' },
+  { label: 'Genomics',                         value: 'q-bio.GN' },
+  { label: 'Neurons and Cognition',            value: 'q-bio.NC' },
+  { label: 'Quantitative Methods',             value: 'q-bio.QM' },
+  { label: '── Statistics & Mathematics ──',   value: '', disabled: true },
+  { label: 'Machine Learning (Statistics)',    value: 'stat.ML' },
+  { label: 'Statistics Theory',               value: 'stat.TH' },
+  { label: 'Mathematics General',             value: 'math.GM' },
+  { label: '── Physics & Engineering ──',      value: '', disabled: true },
+  { label: 'Physics General',                 value: 'physics.gen-ph' },
+  { label: 'Electrical Engineering',          value: 'eess.SP' },
+  { label: 'Systems and Control',             value: 'eess.SY' },
+  { label: '── Economics ──',                  value: '', disabled: true },
+  { label: 'Economics',                       value: 'econ.GN' },
+]
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -43,6 +71,12 @@ function stageClass(stage: string): string {
 
 function isTerminal(stage: string) {
   return stage === 'processed' || stage.startsWith('failed')
+}
+
+function truncateAbstract(text: string, sentences = 2): string {
+  if (!text) return ''
+  const parts = text.match(/[^.!?]+[.!?]+/g) || []
+  return parts.slice(0, sentences).join(' ').trim() || text.slice(0, 200)
 }
 
 // ── Spinner ──────────────────────────────────────────────────────────────────
@@ -108,45 +142,54 @@ function IconSparkle() {
 // VIEW 1: Search / Upload
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
+function SearchView({ onResults }: {
+  onResults: (papers: PaperPreview[]) => void
+}) {
   const [topic, setTopic]       = useState('')
   const [source, setSource]     = useState<'both' | 'arxiv' | 'pubmed'>('both')
-  const [limit, setLimit]       = useState(5)
-  const [dateFrom, setDateFrom] = useState('')
+  const [limit, setLimit]       = useState(10)
   const [file, setFile]         = useState<File | null>(null)
   const [mode, setMode]         = useState<'search' | 'upload'>('search')
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Refine filters
+  const [showRefine, setShowRefine] = useState(false)
+  const [sortBy, setSortBy]         = useState<'date' | 'relevance'>('date')
+  const [dateFrom, setDateFrom]     = useState('')
+  const [dateTo, setDateTo]         = useState('')
+  const [category, setCategory]     = useState('')
+  const [keyword, setKeyword]       = useState('')
+
+  // Active filter summary for collapsed state
+  const activeFilters = [
+    sortBy !== 'date' ? 'By relevance' : '',
+    category ? ARXIV_CATEGORIES.find(c => c.value === category)?.label ?? '' : '',
+    dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom ? `From ${dateFrom}` : dateTo ? `To ${dateTo}` : '',
+    keyword ? `"${keyword}"` : '',
+  ].filter(Boolean)
+
+  // Model picker
   const [models, setModels]               = useState<ModelOption[]>([])
   const [activeModel, setActiveModel]     = useState('')
   const [modelSwitching, setModelSwitching] = useState(false)
   const [isOpenRouter, setIsOpenRouter]   = useState(false)
 
   useEffect(() => {
-    getModels()
-      .then(res => {
-        if (res.provider === 'openrouter') {
-          setIsOpenRouter(true)
-          setModels(res.models)
-          setActiveModel(res.active_model)
-        }
-      })
-      .catch(() => {})
+    getModels().then(res => {
+      if (res.provider === 'openrouter') {
+        setIsOpenRouter(true); setModels(res.models); setActiveModel(res.active_model)
+      }
+    }).catch(() => {})
   }, [])
 
   async function handleModelSelect(modelId: string) {
     if (modelId === activeModel) return
     setModelSwitching(true)
-    try {
-      await selectModel(modelId)
-      setActiveModel(modelId)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to switch model.')
-    } finally {
-      setModelSwitching(false)
-    }
+    try { await selectModel(modelId); setActiveModel(modelId) }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to switch model.') }
+    finally { setModelSwitching(false) }
   }
 
   const topicError = topic.trim().length === 0 && topic.length > 0
@@ -159,8 +202,11 @@ function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
     setError(''); setLoading(true)
     try {
       const result = await searchPapers({
-        topic: topic.trim(), limit, source,
+        topic: topic.trim(), limit, source, sort_by: sortBy,
         ...(dateFrom ? { date_from: dateFrom } : {}),
+        ...(dateTo   ? { date_to: dateTo }     : {}),
+        ...(category ? { category }            : {}),
+        ...(keyword  ? { keyword }             : {}),
       })
       onResults(result.papers)
     } catch (err: unknown) {
@@ -174,8 +220,15 @@ function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
     if (!topic.trim()) { setError('Please enter a topic.'); return }
     setError(''); setLoading(true)
     try {
+      // Upload goes directly to processing — no selection step needed
       const result = await uploadPaper(file, topic.trim())
-      onResults([result.paper])
+      // Wrap as PaperPreview so App can route to processing directly
+      onResults([{
+        paper_id: result.paper.paper_id, source: 'local',
+        title: result.paper.title ?? file.name, abstract: result.paper.abstract ?? '',
+        authors: result.paper.authors ?? [], url: result.paper.url ?? '',
+        has_pdf: true, published: '', journal: '', categories: [], doi: '',
+      }])
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed.')
     } finally { setLoading(false) }
@@ -191,7 +244,7 @@ function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
-      <div style={{ width: '100%', maxWidth: '520px' }} className="fade-in">
+      <div style={{ width: '100%', maxWidth: '560px' }} className="fade-in">
 
         <div style={{ marginBottom: '32px', textAlign: 'center' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
@@ -199,10 +252,10 @@ function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>ResearchRAG</span>
           </div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 600, color: 'var(--text)', marginBottom: '8px' }}>Research, understood.</h1>
-          <p style={{ color: 'var(--text-2)', fontSize: '0.9375rem' }}>Fetch papers from arXiv or PubMed, chat with them, generate content.</p>
+          <p style={{ color: 'var(--text-2)', fontSize: '0.9375rem' }}>Search papers, review them, then choose which ones to explore.</p>
         </div>
 
-        {/* Model picker — only shown when provider=openrouter */}
+        {/* Model picker */}
         {isOpenRouter && models.length > 0 && (
           <div className="card" style={{ padding: '16px', marginBottom: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
@@ -213,7 +266,7 @@ function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
               {models.map(m => (
                 <button key={m.id} onClick={() => handleModelSelect(m.id)} disabled={modelSwitching}
                   style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', padding: '10px 12px', borderRadius: 'var(--radius)', border: `1px solid ${activeModel === m.id ? 'var(--accent)' : 'var(--border)'}`, background: activeModel === m.id ? 'var(--accent-glow)' : 'var(--bg)', cursor: modelSwitching ? 'not-allowed' : 'pointer', textAlign: 'left', transition: 'all 0.15s', opacity: modelSwitching ? 0.6 : 1 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
                       <span style={{ fontSize: '0.875rem', fontWeight: 500, color: activeModel === m.id ? 'var(--accent)' : 'var(--text)' }}>{m.name}</span>
                       {m.recommended && <span style={{ fontSize: '0.6875rem', background: 'var(--accent-glow)', color: 'var(--accent)', padding: '1px 6px', borderRadius: '10px', fontWeight: 500 }}>recommended</span>}
@@ -227,6 +280,7 @@ function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
           </div>
         )}
 
+        {/* Mode toggle */}
         <div style={{ display: 'flex', background: 'var(--bg-2)', borderRadius: 'var(--radius)', padding: '3px', marginBottom: '20px', border: '1px solid var(--border)' }}>
           {(['search', 'upload'] as const).map(m => (
             <button key={m} onClick={() => { setMode(m); setError('') }}
@@ -238,6 +292,7 @@ function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
 
         <div className="card" style={{ padding: '24px' }}>
           <form onSubmit={mode === 'search' ? handleSearch : handleUpload}>
+
             <div style={{ marginBottom: '16px' }}>
               <label className="label">{mode === 'search' ? 'Topic or keywords' : 'Topic label'}</label>
               <input className={`input ${topicError ? 'error' : ''}`} value={topic} onChange={e => { setTopic(e.target.value); setError('') }} placeholder={mode === 'search' ? 'e.g. large language models, RAG' : 'e.g. transformer architecture'} maxLength={200} />
@@ -256,15 +311,80 @@ function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
                     </select>
                   </div>
                   <div>
-                    <label className="label">Results</label>
+                    <label className="label">Number of results</label>
                     <select className="select" value={limit} onChange={e => setLimit(Number(e.target.value))}>
-                      {[3, 5, 10, 20].map(n => <option key={n} value={n}>{n} papers</option>)}
+                      {[5, 10, 20, 30, 50].map(n => <option key={n} value={n}>{n} papers</option>)}
                     </select>
                   </div>
                 </div>
-                <div style={{ marginBottom: '20px' }}>
-                  <label className="label">From date <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>(optional)</span></label>
-                  <input className="input" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+
+                {/* Refine results — collapsible */}
+                <div style={{ marginBottom: '20px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+                  <button type="button" onClick={() => setShowRefine(o => !o)}
+                    style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--bg-3)', border: 'none', cursor: 'pointer', color: 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontWeight: 500 }}>Refine results</span>
+                      {activeFilters.length > 0 && !showRefine && (
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>
+                          · {activeFilters.join(' · ')}
+                        </span>
+                      )}
+                    </div>
+                    <IconChevron open={showRefine} />
+                  </button>
+
+                  {showRefine && (
+                    <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {/* Sort by */}
+                      <div>
+                        <label className="label">Sort by</label>
+                        <select className="select" value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}>
+                          <option value="date">Most recent</option>
+                          <option value="relevance">Most relevant</option>
+                        </select>
+                      </div>
+
+                      {/* arXiv category — only shown when source includes arxiv */}
+                      {source !== 'pubmed' && (
+                        <div>
+                          <label className="label">arXiv category</label>
+                          <select className="select" value={category} onChange={e => setCategory(e.target.value)}>
+                            {ARXIV_CATEGORIES.map((c, i) => (
+                              <option key={i} value={c.value} disabled={c.disabled as boolean | undefined}>
+                                {c.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Date range */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        <div>
+                          <label className="label">From date</label>
+                          <input className="input" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+                        </div>
+                        <div>
+                          <label className="label">To date</label>
+                          <input className="input" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+                        </div>
+                      </div>
+
+                      {/* Must-include keyword */}
+                      <div>
+                        <label className="label">Must include keyword</label>
+                        <input className="input" value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="e.g. interpretability, fine-tuning" />
+                      </div>
+
+                      {/* Clear filters */}
+                      {activeFilters.length > 0 && (
+                        <button type="button" className="btn btn-ghost btn-sm"
+                          onClick={() => { setSortBy('date'); setCategory(''); setDateFrom(''); setDateTo(''); setKeyword('') }}>
+                          Clear filters
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -295,7 +415,260 @@ function SearchView({ onResults }: { onResults: (papers: Paper[]) => void }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VIEW 2: Processing
+// VIEW 2: Paper Selection
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Source badge colors
+const SOURCE_COLORS: Record<string, { bg: string; color: string; label: string }> = {
+  arxiv:  { bg: 'rgba(180,120,255,0.15)', color: '#c084fc', label: 'arXiv' },
+  pubmed: { bg: 'rgba(59,130,246,0.15)',  color: '#60a5fa', label: 'PubMed' },
+  local:  { bg: 'rgba(16,185,129,0.15)',  color: 'var(--accent)', label: 'Local' },
+}
+
+function PaperSelectionCard({
+  paper,
+  selected,
+  onToggle,
+}: {
+  paper: PaperPreview
+  selected: boolean
+  onToggle: () => void
+}) {
+  const [summary, setSummary]       = useState<string | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [showFullAbstract, setShowFullAbstract] = useState(false)
+  const srcStyle = SOURCE_COLORS[paper.source] ?? SOURCE_COLORS.local
+  const canProcess = paper.has_pdf || paper.source !== 'pubmed'
+
+  // Generate AI summary on mount (staggered by parent)
+  useEffect(() => {
+    if (!paper.abstract) { setSummary(truncateAbstract(paper.abstract || '', 2)); return }
+    setSummaryLoading(true)
+    fetch('/api/generate/followup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        context: `Summarize this research paper abstract in 2-3 plain sentences for a non-specialist:\n\n${paper.abstract}`,
+      }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => {
+        // The followup endpoint returns questions; we're repurposing it for summaries.
+        // The LLM returns a JSON array — take the joined text as the summary.
+        const qs: string[] = data.questions ?? []
+        if (qs.length > 0) {
+          setSummary(qs.join(' '))
+        } else {
+          setSummary(truncateAbstract(paper.abstract, 2))
+        }
+      })
+      .catch(() => setSummary(truncateAbstract(paper.abstract, 2)))
+      .finally(() => setSummaryLoading(false))
+  }, [paper.paper_id])
+
+  return (
+    <div className="card fade-in" style={{
+      marginBottom: '12px',
+      border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+      background: selected ? 'rgba(16,185,129,0.04)' : 'var(--bg-2)',
+      transition: 'all 0.15s',
+    }}>
+      <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
+
+        {/* Select toggle */}
+        <div style={{ flexShrink: 0, paddingTop: '2px' }}>
+          <button onClick={onToggle}
+            disabled={!canProcess}
+            title={!canProcess ? 'Abstract only — chat unavailable' : undefined}
+            style={{
+              width: '22px', height: '22px', borderRadius: '6px',
+              border: `2px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+              background: selected ? 'var(--accent)' : 'transparent',
+              cursor: canProcess ? 'pointer' : 'not-allowed',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0, transition: 'all 0.15s',
+              opacity: canProcess ? 1 : 0.4,
+            }}>
+            {selected && (
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
+          </button>
+        </div>
+
+        {/* Content */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Header row */}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.7rem', fontWeight: 600, padding: '2px 8px', borderRadius: '12px', background: srcStyle.bg, color: srcStyle.color, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+              {srcStyle.label}
+            </span>
+            {!paper.has_pdf && paper.source === 'pubmed' && (
+              <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '12px', background: 'var(--warn-bg)', color: 'var(--warn)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+                Abstract only
+              </span>
+            )}
+            {paper.published && (
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                {paper.published.slice(0, 10)}
+              </span>
+            )}
+          </div>
+
+          {/* Title */}
+          <p style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--text)', lineHeight: 1.4, marginBottom: '6px' }}>
+            {paper.title || paper.paper_id}
+          </p>
+
+          {/* Authors */}
+          {paper.authors.length > 0 && (
+            <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', marginBottom: '8px' }}>
+              {paper.authors.slice(0, 3).join(', ')}{paper.authors.length > 3 ? ' et al.' : ''}
+            </p>
+          )}
+
+          {/* AI summary */}
+          <div style={{ fontSize: '0.875rem', color: 'var(--text-2)', lineHeight: 1.6, marginBottom: '8px' }}>
+            {summaryLoading ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Spinner size="spinner-sm" />
+                <span style={{ color: 'var(--text-3)', fontSize: '0.8125rem' }}>Summarising…</span>
+              </div>
+            ) : (
+              <span>{summary ?? truncateAbstract(paper.abstract, 2)}</span>
+            )}
+          </div>
+
+          {/* Show original abstract toggle */}
+          {paper.abstract && (
+            <div>
+              <button type="button" onClick={() => setShowFullAbstract(o => !o)}
+                style={{ fontSize: '0.8125rem', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+                {showFullAbstract ? 'Hide abstract' : 'Show original abstract'}
+              </button>
+              {showFullAbstract && (
+                <p style={{ fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.6, marginTop: '8px', padding: '10px 12px', background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+                  {paper.abstract}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Journal / DOI */}
+          {(paper.journal || paper.doi) && (
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: '6px', fontFamily: 'var(--font-mono)' }}>
+              {paper.journal}{paper.journal && paper.doi ? ' · ' : ''}{paper.doi ? `DOI: ${paper.doi}` : ''}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SelectionView({ papers, onSelect, onBack }: {
+  papers:   PaperPreview[]
+  onSelect: (selected: PaperPreview[]) => void
+  onBack:   () => void
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [loading, setLoading]   = useState(false)
+  const [error, setError]       = useState('')
+
+  function toggle(paperId: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(paperId)) next.delete(paperId)
+      else next.add(paperId)
+      return next
+    })
+  }
+
+  function selectAll() {
+    setSelected(new Set(papers.filter(p => p.has_pdf || p.source !== 'pubmed').map(p => p.paper_id)))
+  }
+
+  function deselectAll() { setSelected(new Set()) }
+
+  async function handleProcess() {
+    if (selected.size === 0) return
+    setError(''); setLoading(true)
+    try {
+      await processPapers(Array.from(selected))
+      onSelect(papers.filter(p => selected.has(p.paper_id)))
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to start processing.')
+      setLoading(false)
+    }
+  }
+
+  const processable = papers.filter(p => p.has_pdf || p.source !== 'pubmed')
+
+  return (
+    <div style={{ minHeight: '100vh', padding: '32px 24px' }}>
+      <div style={{ maxWidth: '760px', margin: '0 auto' }}>
+
+        {/* Header */}
+        <div style={{ marginBottom: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+            <div>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '4px' }}>
+                Select papers to process
+              </h2>
+              <p style={{ color: 'var(--text-3)', fontSize: '0.875rem' }}>
+                {papers.length} result{papers.length !== 1 ? 's' : ''} found · {selected.size} selected
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <button className="btn btn-ghost btn-sm" onClick={onBack}>← New search</button>
+              <button className="btn btn-ghost btn-sm" onClick={selected.size === processable.length ? deselectAll : selectAll}>
+                {selected.size === processable.length ? 'Deselect all' : 'Select all'}
+              </button>
+              <button className="btn btn-primary" onClick={handleProcess}
+                disabled={selected.size === 0 || loading}
+                style={{ minWidth: '140px' }}>
+                {loading
+                  ? <><Spinner />Starting…</>
+                  : selected.size === 0
+                  ? 'Select papers'
+                  : `Process ${selected.size} paper${selected.size !== 1 ? 's' : ''}`
+                }
+              </button>
+            </div>
+          </div>
+
+          {/* Progress bar for selection count */}
+          <div style={{ height: '3px', background: 'var(--border)', borderRadius: '2px', overflow: 'hidden' }}>
+            <div style={{ height: '100%', background: 'var(--accent)', borderRadius: '2px', width: `${processable.length ? (selected.size / processable.length) * 100 : 0}%`, transition: 'width 0.3s ease' }} />
+          </div>
+        </div>
+
+        {error && <div className="notice notice-error" style={{ marginBottom: '16px' }}>{error}</div>}
+
+        {/* Paper cards — summaries generated staggered 400ms apart */}
+        {papers.map((paper, i) => (
+          <div key={paper.paper_id} style={{ animationDelay: `${i * 60}ms` }}>
+            <PaperSelectionCard
+              paper={paper}
+              selected={selected.has(paper.paper_id)}
+              onToggle={() => toggle(paper.paper_id)}
+            />
+          </div>
+        ))}
+
+        {papers.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-3)' }}>
+            No papers found. Try a different topic or adjust your filters.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VIEW 3: Processing
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PaperCard({ paper }: { paper: PaperStatus }) {
@@ -324,8 +697,6 @@ function PaperCard({ paper }: { paper: PaperStatus }) {
   )
 }
 
-// FIX 1: onDone now passes updated Paper[] so ChatView receives accurate
-// pipeline_stage values instead of the stale "pending" from search time.
 function ProcessingView({ papers, onDone }: {
   papers: Paper[]
   onDone: (processedPapers: Paper[]) => void
@@ -358,8 +729,6 @@ function ProcessingView({ papers, onDone }: {
           update(paper.paper_id, {
             sseStage:       data.success ? 'processed' : 'failed_processing',
             sseMessage:     data.message ?? (data.success ? 'Ready' : data.error ?? 'Failed'),
-            // FIX: update pipeline_stage on the paper object itself so ChatView
-            // sees the correct stage when it receives these papers via onDone.
             pipeline_stage: data.success ? 'processed' : 'failed_processing',
             chunk_count:    data.chunk_count ?? paper.chunk_count,
             error_message:  data.success ? null : (data.error ?? 'Processing failed'),
@@ -450,38 +819,27 @@ function GenerationPanel({ paperId }: { paperId: string }) {
     try {
       const res = await generateContent({ paper_id: paperId, platform, style, tone, color_scheme: colorScheme })
       const qk  = res.queue_key
-
       await new Promise<void>((resolve, reject) => {
         const es = new EventSource(`${BACKEND}/api/generate/${qk}/progress`)
         esRef.current = es
-
         es.addEventListener('completed', async () => {
           try {
-            const hist   = await generationHistory(paperId, platform)
+            const hist = await generationHistory(paperId, platform)
             const latest = hist.items[0] ?? null
             setResult(latest)
-            if (latest) {
-              const links = await getShareLinks(latest.id)
-              setShareLinks(links)
-            }
+            if (latest) { const links = await getShareLinks(latest.id); setShareLinks(links) }
           } catch { /* ignore */ }
         })
-
         es.addEventListener('done', (e: MessageEvent) => {
-          try {
-            const data = JSON.parse(e.data)
-            if (!data.success && data.error) reject(new Error(data.error))
-            else resolve()
-          } catch { resolve() }
+          try { const d = JSON.parse(e.data); if (!d.success && d.error) reject(new Error(d.error)); else resolve() }
+          catch { resolve() }
           es.close()
         })
-
         es.addEventListener('failed', (e: MessageEvent) => {
           try { reject(new Error(JSON.parse(e.data).error ?? 'Generation failed')) }
           catch { reject(new Error('Generation failed')) }
           es.close()
         })
-
         es.onerror = () => { reject(new Error('SSE connection lost')); es.close() }
       })
     } catch (err: unknown) {
@@ -495,9 +853,8 @@ function GenerationPanel({ paperId }: { paperId: string }) {
     try {
       const res = await exportCarousel(result.id)
       setExportUrl(`/api/generate/${result.id}/download?filename=${encodeURIComponent(res.filename)}`)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Export failed.')
-    } finally { setExporting(false) }
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Export failed.') }
+    finally { setExporting(false) }
   }
 
   function renderPreview() {
@@ -548,9 +905,7 @@ function GenerationPanel({ paperId }: { paperId: string }) {
           </div>
         )
       }
-    } catch {
-      return <div style={{ padding: '12px', fontSize: '0.875rem' }}>{result.content}</div>
-    }
+    } catch { return <div style={{ padding: '12px', fontSize: '0.875rem' }}>{result.content}</div> }
   }
 
   return (
@@ -571,12 +926,10 @@ function GenerationPanel({ paperId }: { paperId: string }) {
               </button>
             ))}
           </div>
-
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
             <div><label className="label">Style</label><input className="input" value={style} onChange={e => setStyle(e.target.value)} placeholder="e.g. educational" /></div>
             <div><label className="label">Tone</label><input className="input" value={tone} onChange={e => setTone(e.target.value)} placeholder="e.g. conversational" /></div>
           </div>
-
           {platform === 'carousel' && (
             <div style={{ marginBottom: '10px' }}>
               <label className="label">Color scheme</label>
@@ -585,13 +938,10 @@ function GenerationPanel({ paperId }: { paperId: string }) {
               </select>
             </div>
           )}
-
           {error && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{error}</div>}
-
           <button className="btn btn-primary btn-full" onClick={handleGenerate} disabled={loading} style={{ marginBottom: '12px' }}>
             {loading ? <><Spinner />Generating…</> : 'Generate'}
           </button>
-
           {result && (
             <div className="fade-in" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', marginBottom: '10px' }}>
               <div style={{ background: 'var(--bg-3)', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
@@ -600,7 +950,6 @@ function GenerationPanel({ paperId }: { paperId: string }) {
               <div style={{ background: 'var(--bg-2)', maxHeight: '260px', overflowY: 'auto' }}>{renderPreview()}</div>
             </div>
           )}
-
           {result && (
             <div className="fade-in" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               {platform === 'carousel' && (
@@ -625,43 +974,31 @@ function GenerationPanel({ paperId }: { paperId: string }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Follow-up suggestions
-// FIX 2: Use the LLM API directly instead of sendMessage() so suggestions are
-// never saved to the chat session database. sendMessage() writes both the
-// prompt and response to persistent history, corrupting future context.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function FollowUpSuggestions({
-  lastResponse,
-  onSelect,
-}: {
+function FollowUpSuggestions({ lastResponse, onSelect }: {
   lastResponse: string
   onSelect: (q: string) => void
 }) {
-  const [questions, setQuestions]   = useState<string[]>([])
-  const [loading, setLoading]       = useState(false)
+  const [questions, setQuestions] = useState<string[]>([])
+  const [loading, setLoading]     = useState(false)
   const prevResponse = useRef('')
 
   useEffect(() => {
     if (!lastResponse || lastResponse === prevResponse.current) return
     prevResponse.current = lastResponse
-
-    setLoading(true)
-    setQuestions([])
-
-    // Call the backend LLM endpoint directly — not through sendMessage() —
-    // so these prompts are never written to the session's message history.
+    setLoading(true); setQuestions([])
     fetch('/api/generate/followup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ context: lastResponse }),
     })
-      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(r => r.ok ? r.json() : Promise.reject())
       .then(data => {
-        if (Array.isArray(data.questions)) {
+        if (Array.isArray(data.questions))
           setQuestions(data.questions.slice(0, 3).map(String).filter(Boolean))
-        }
       })
-      .catch(() => { /* non-critical */ })
+      .catch(() => {})
       .finally(() => setLoading(false))
   }, [lastResponse])
 
@@ -675,8 +1012,7 @@ function FollowUpSuggestions({
       </div>
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Spinner size="spinner-sm" />
-          <span style={{ fontSize: '0.8125rem', color: 'var(--text-3)' }}>Thinking of follow-ups…</span>
+          <Spinner size="spinner-sm" /><span style={{ fontSize: '0.8125rem', color: 'var(--text-3)' }}>Thinking…</span>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -695,7 +1031,7 @@ function FollowUpSuggestions({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VIEW 3: Chat
+// VIEW 4: Chat
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNewSearch: () => void }) {
@@ -708,9 +1044,6 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
   const [chatError, setChatError]         = useState('')
   const [sessError, setSessError]         = useState('')
   const [generateOpen, setGenerateOpen]   = useState(false)
-  // FIX 3: activePaper starts null and is always set by fetching from the API
-  // in openSession() — never derived from initialPapers which carries stale
-  // pipeline_stage="pending" from the moment of the search response.
   const [activePaper, setActivePaper]     = useState<Paper | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -733,15 +1066,9 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
       setActiveSession(res.session)
       setMessages(res.session.messages)
       setLevel((res.session.level as Level) ?? 'beginner')
-
-      // FIX 3: Fetch the paper's live state from the API.
-      // initialPapers has pipeline_stage="pending" (set at search time).
-      // Using it directly would always hide the generation panel even after
-      // the paper finishes processing.
       try {
         const papersRes = await listPapers({ stage: 'processed' })
         const current = papersRes.papers.find(p => p.paper_id === res.session.paper_id)
-        // Fall back to initialPapers if the paper isn't processed yet
         setActivePaper(current ?? initialPapers.find(p => p.paper_id === res.session.paper_id) ?? null)
       } catch {
         setActivePaper(initialPapers.find(p => p.paper_id === res.session.paper_id) ?? null)
@@ -762,10 +1089,8 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
   async function submitMessage(text: string) {
     if (!activeSession || sending) return
     setInput(''); setChatError(''); setSending(true)
-
     const tempMsg: Message = { id: Date.now(), role: 'user', content: text, level, created_at: null }
     setMessages(prev => [...prev, tempMsg])
-
     try {
       const res = await sendMessage(activeSession.session_id, text, level)
       const assistantMsg: Message = { id: Date.now() + 1, role: 'assistant', content: res.response, level, created_at: null }
@@ -779,16 +1104,13 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
 
   async function handleLevelChange(newLevel: Level) {
     setLevel(newLevel)
-    if (activeSession) {
-      try { await updateLevel(activeSession.session_id, newLevel) } catch { /* non-critical */ }
-    }
+    if (activeSession) { try { await updateLevel(activeSession.session_id, newLevel) } catch { /* non-critical */ } }
   }
 
-  const paperIsReady = activePaper?.pipeline_stage === 'processed'
+  const paperIsReady = activePaper?.pipeline_stage === 'processed' && (activePaper?.chunk_count ?? 0) > 0
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-
       {/* Sidebar */}
       <div style={{ width: '260px', flexShrink: 0, background: 'var(--bg-2)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ padding: '16px', borderBottom: '1px solid var(--border)' }}>
@@ -798,7 +1120,6 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
           </div>
           <button className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>+ New search</button>
         </div>
-
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
           {sessError && <div className="notice notice-error" style={{ margin: '8px' }}>{sessError}</div>}
           {sessions.length === 0 && <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', padding: '12px 8px', textAlign: 'center' }}>No sessions yet</p>}
@@ -814,8 +1135,6 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
 
       {/* Main */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-
-        {/* Header */}
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', flexShrink: 0, gap: '12px' }}>
           <div style={{ minWidth: 0 }}>
             <p style={{ fontWeight: 600, fontSize: '0.9375rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -839,10 +1158,7 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
           </div>
         </div>
 
-        {/* Body */}
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-
-          {/* Chat */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
               {!activeSession && (
@@ -852,7 +1168,6 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
                   </p>
                 </div>
               )}
-
               {messages.map((msg, i) => (
                 <div key={msg.id ?? i} className="fade-in" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: '14px' }}>
                   <div style={{ maxWidth: '72%', padding: '10px 14px', borderRadius: 'var(--radius-lg)', background: msg.role === 'user' ? 'var(--accent)' : 'var(--bg-3)', color: msg.role === 'user' ? '#fff' : 'var(--text)', fontSize: '0.9rem', lineHeight: 1.6, borderBottomRightRadius: msg.role === 'user' ? '4px' : undefined, borderBottomLeftRadius: msg.role === 'assistant' ? '4px' : undefined }}>
@@ -860,23 +1175,16 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
                   </div>
                 </div>
               ))}
-
               {sending && (
                 <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '14px' }}>
                   <div style={{ padding: '10px 14px', borderRadius: 'var(--radius-lg)', borderBottomLeftRadius: '4px', background: 'var(--bg-3)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Spinner size="spinner-sm" />
-                    <span style={{ fontSize: '0.875rem', color: 'var(--text-3)' }}>Thinking…</span>
+                    <Spinner size="spinner-sm" /><span style={{ fontSize: '0.875rem', color: 'var(--text-3)' }}>Thinking…</span>
                   </div>
                 </div>
               )}
-
               {activeSession && !sending && lastAssistantMessage && (
-                <FollowUpSuggestions
-                  lastResponse={lastAssistantMessage}
-                  onSelect={q => submitMessage(q)}
-                />
+                <FollowUpSuggestions lastResponse={lastAssistantMessage} onSelect={q => submitMessage(q)} />
               )}
-
               <div ref={bottomRef} />
             </div>
 
@@ -889,7 +1197,6 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
             </div>
           </div>
 
-          {/* Generate panel */}
           {generateOpen && (
             <div className="fade-in" style={{ width: '300px', flexShrink: 0, borderLeft: '1px solid var(--border)', overflowY: 'auto', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
               {paperIsReady
@@ -915,28 +1222,55 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [view, setView]     = useState<View>('search')
-  const [papers, setPapers] = useState<Paper[]>([])
+  const [view, setView]               = useState<View>('search')
+  const [searchResults, setSearchResults] = useState<PaperPreview[]>([])
+  const [papers, setPapers]           = useState<Paper[]>([])
 
-  function handleSearchResults(results: Paper[]) {
-    setPapers(results)
+  function handleSearchResults(results: PaperPreview[]) {
+    setSearchResults(results)
+    // Upload goes straight to processing (paper already saved by uploadPaper)
+    if (results.length === 1 && results[0].source === 'local') {
+      // Convert preview to Paper-like for ProcessingView
+      setPapers([{
+        paper_id: results[0].paper_id, source: 'local',
+        title: results[0].title, abstract: results[0].abstract,
+        authors: results[0].authors, url: results[0].url,
+        pipeline_stage: 'pending', chunk_count: 0,
+        error_message: null, topic: null, created_at: null, processed_at: null,
+      }])
+      setView('processing')
+    } else {
+      setView('selection')
+    }
+  }
+
+  function handleSelection(selected: PaperPreview[]) {
+    // processPapers already called — convert previews to Paper-like for ProcessingView
+    setPapers(selected.map(p => ({
+      paper_id: p.paper_id, source: p.source,
+      title: p.title, abstract: p.abstract,
+      authors: p.authors, url: p.url,
+      pipeline_stage: 'pending' as const, chunk_count: 0,
+      error_message: null, topic: null, created_at: null, processed_at: null,
+    })))
     setView('processing')
   }
 
-  // FIX 1: Receives updated papers with correct pipeline_stage from ProcessingView
   function handleProcessingDone(processedPapers: Paper[]) {
     setPapers(processedPapers)
     setView('chat')
   }
 
   function handleNewSearch() {
-    setPapers([])
+    setSearchResults([])
     setView('search')
+    // Note: papers and sessions persist in ChatView sidebar
   }
 
   return (
     <>
       {view === 'search'     && <SearchView onResults={handleSearchResults} />}
+      {view === 'selection'  && <SelectionView papers={searchResults} onSelect={handleSelection} onBack={() => setView('search')} />}
       {view === 'processing' && <ProcessingView papers={papers} onDone={handleProcessingDone} />}
       {view === 'chat'       && <ChatView initialPapers={papers} onNewSearch={handleNewSearch} />}
     </>
