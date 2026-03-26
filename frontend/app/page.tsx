@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   searchPapers, processPapers, uploadPaper, listSessions, getSession, listPapers,
-  sendMessage, updateLevel, generateContent, generationHistory,
+  sendMessage, updateLevel, generateContent, generationHistory, deleteSession,
   exportCarousel, getShareLinks, getModels, selectModel,
   type Paper, type PaperPreview, type Session, type SessionDetail,
   type Message, type SocialItem, type ModelOption,
@@ -22,36 +22,36 @@ interface PaperStatus extends Paper {
 
 const BACKEND = 'http://localhost:8000'
 
-// ── arXiv category options (full names → codes) ───────────────────────────────
+// ── arXiv category options ────────────────────────────────────────────────────
 const ARXIV_CATEGORIES = [
-  { label: 'All Categories',                   value: '' },
-  { label: '── Computer Science ──',           value: '', disabled: true },
-  { label: 'Artificial Intelligence',          value: 'cs.AI' },
-  { label: 'Machine Learning',                 value: 'cs.LG' },
-  { label: 'Computation and Language (NLP)',   value: 'cs.CL' },
-  { label: 'Computer Vision',                  value: 'cs.CV' },
-  { label: 'Robotics',                         value: 'cs.RO' },
-  { label: 'Human-Computer Interaction',       value: 'cs.HC' },
-  { label: 'Information Retrieval',            value: 'cs.IR' },
-  { label: 'Neural and Evolutionary Computing',value: 'cs.NE' },
-  { label: '── Biology & Medicine ──',         value: '', disabled: true },
-  { label: 'Biomolecules',                     value: 'q-bio.BM' },
-  { label: 'Genomics',                         value: 'q-bio.GN' },
-  { label: 'Neurons and Cognition',            value: 'q-bio.NC' },
-  { label: 'Quantitative Methods',             value: 'q-bio.QM' },
-  { label: '── Statistics & Mathematics ──',   value: '', disabled: true },
-  { label: 'Machine Learning (Statistics)',    value: 'stat.ML' },
-  { label: 'Statistics Theory',               value: 'stat.TH' },
-  { label: 'Mathematics General',             value: 'math.GM' },
-  { label: '── Physics & Engineering ──',      value: '', disabled: true },
-  { label: 'Physics General',                 value: 'physics.gen-ph' },
-  { label: 'Electrical Engineering',          value: 'eess.SP' },
-  { label: 'Systems and Control',             value: 'eess.SY' },
-  { label: '── Economics ──',                  value: '', disabled: true },
-  { label: 'Economics',                       value: 'econ.GN' },
+  { label: 'All Categories',                    value: '' },
+  { label: '── Computer Science ──',            value: '', disabled: true },
+  { label: 'Artificial Intelligence',           value: 'cs.AI' },
+  { label: 'Machine Learning',                  value: 'cs.LG' },
+  { label: 'Computation and Language (NLP)',    value: 'cs.CL' },
+  { label: 'Computer Vision',                   value: 'cs.CV' },
+  { label: 'Robotics',                          value: 'cs.RO' },
+  { label: 'Human-Computer Interaction',        value: 'cs.HC' },
+  { label: 'Information Retrieval',             value: 'cs.IR' },
+  { label: 'Neural and Evolutionary Computing', value: 'cs.NE' },
+  { label: '── Biology & Medicine ──',          value: '', disabled: true },
+  { label: 'Biomolecules',                      value: 'q-bio.BM' },
+  { label: 'Genomics',                          value: 'q-bio.GN' },
+  { label: 'Neurons and Cognition',             value: 'q-bio.NC' },
+  { label: 'Quantitative Methods',              value: 'q-bio.QM' },
+  { label: '── Statistics & Mathematics ──',    value: '', disabled: true },
+  { label: 'Machine Learning (Statistics)',     value: 'stat.ML' },
+  { label: 'Statistics Theory',                value: 'stat.TH' },
+  { label: 'Mathematics General',              value: 'math.GM' },
+  { label: '── Physics & Engineering ──',       value: '', disabled: true },
+  { label: 'Physics General',                  value: 'physics.gen-ph' },
+  { label: 'Electrical Engineering',           value: 'eess.SP' },
+  { label: 'Systems and Control',              value: 'eess.SY' },
+  { label: '── Economics ──',                   value: '', disabled: true },
+  { label: 'Economics',                        value: 'econ.GN' },
 ]
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function stageLabel(stage: string): string {
   const map: Record<string, string> = {
@@ -79,13 +79,66 @@ function truncateAbstract(text: string, sentences = 2): string {
   return parts.slice(0, sentences).join(' ').trim() || text.slice(0, 200)
 }
 
-// ── Spinner ──────────────────────────────────────────────────────────────────
+/**
+ * Returns a human-readable relative time string from an ISO timestamp.
+ * e.g. "just now", "5 min ago", "2 hours ago", "Yesterday", "3 days ago"
+ */
+function relativeTime(iso: string | null): string {
+  if (!iso) return ''
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins  = Math.floor(diff / 60000)
+  const hours = Math.floor(diff / 3600000)
+  const days  = Math.floor(diff / 86400000)
+  if (mins  <  1) return 'just now'
+  if (mins  < 60) return `${mins}m ago`
+  if (hours < 24) return `${hours}h ago`
+  if (days  === 1) return 'Yesterday'
+  if (days  <  7) return `${days}d ago`
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/**
+ * Groups sessions into date buckets for sidebar display.
+ */
+type SessionGroup = { label: string; sessions: Session[] }
+
+function groupSessions(sessions: Session[]): SessionGroup[] {
+  const now   = Date.now()
+  const today: Session[]     = []
+  const yesterday: Session[] = []
+  const week: Session[]      = []
+  const older: Session[]     = []
+
+  for (const s of sessions) {
+    const diff = now - new Date(s.last_active_at ?? s.created_at ?? 0).getTime()
+    const days = diff / 86400000
+    if (days < 1)      today.push(s)
+    else if (days < 2) yesterday.push(s)
+    else if (days < 7) week.push(s)
+    else               older.push(s)
+  }
+
+  const groups: SessionGroup[] = []
+  if (today.length)     groups.push({ label: 'Today',     sessions: today })
+  if (yesterday.length) groups.push({ label: 'Yesterday', sessions: yesterday })
+  if (week.length)      groups.push({ label: 'This week', sessions: week })
+  if (older.length)     groups.push({ label: 'Older',     sessions: older })
+  return groups
+}
+
+const SOURCE_COLORS: Record<string, { bg: string; color: string; label: string }> = {
+  arxiv:  { bg: 'rgba(180,120,255,0.15)', color: '#c084fc', label: 'arXiv' },
+  pubmed: { bg: 'rgba(59,130,246,0.15)',  color: '#60a5fa', label: 'PubMed' },
+  local:  { bg: 'rgba(16,185,129,0.15)',  color: 'var(--accent)', label: 'Local' },
+}
+
+// ── Spinner ───────────────────────────────────────────────────────────────────
 
 function Spinner({ size = '' }: { size?: string }) {
   return <span className={`spinner ${size}`} />
 }
 
-// ── Icons ────────────────────────────────────────────────────────────────────
+// ── Icons ─────────────────────────────────────────────────────────────────────
 
 function IconSearch() {
   return (
@@ -137,6 +190,13 @@ function IconSparkle() {
     </svg>
   )
 }
+function IconTrash() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+    </svg>
+  )
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VIEW 1: Search / Upload
@@ -145,16 +205,15 @@ function IconSparkle() {
 function SearchView({ onResults }: {
   onResults: (papers: PaperPreview[]) => void
 }) {
-  const [topic, setTopic]       = useState('')
-  const [source, setSource]     = useState<'both' | 'arxiv' | 'pubmed'>('both')
-  const [limit, setLimit]       = useState(10)
-  const [file, setFile]         = useState<File | null>(null)
-  const [mode, setMode]         = useState<'search' | 'upload'>('search')
-  const [loading, setLoading]   = useState(false)
-  const [error, setError]       = useState('')
+  const [topic, setTopic]     = useState('')
+  const [source, setSource]   = useState<'both' | 'arxiv' | 'pubmed'>('both')
+  const [limit, setLimit]     = useState(10)
+  const [file, setFile]       = useState<File | null>(null)
+  const [mode, setMode]       = useState<'search' | 'upload'>('search')
+  const [loading, setLoading] = useState(false)
+  const [error, setError]     = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
-  // Refine filters
   const [showRefine, setShowRefine] = useState(false)
   const [sortBy, setSortBy]         = useState<'date' | 'relevance'>('date')
   const [dateFrom, setDateFrom]     = useState('')
@@ -162,7 +221,6 @@ function SearchView({ onResults }: {
   const [category, setCategory]     = useState('')
   const [keyword, setKeyword]       = useState('')
 
-  // Active filter summary for collapsed state
   const activeFilters = [
     sortBy !== 'date' ? 'By relevance' : '',
     category ? ARXIV_CATEGORIES.find(c => c.value === category)?.label ?? '' : '',
@@ -170,11 +228,10 @@ function SearchView({ onResults }: {
     keyword ? `"${keyword}"` : '',
   ].filter(Boolean)
 
-  // Model picker
-  const [models, setModels]               = useState<ModelOption[]>([])
-  const [activeModel, setActiveModel]     = useState('')
+  const [models, setModels]                 = useState<ModelOption[]>([])
+  const [activeModel, setActiveModel]       = useState('')
   const [modelSwitching, setModelSwitching] = useState(false)
-  const [isOpenRouter, setIsOpenRouter]   = useState(false)
+  const [isOpenRouter, setIsOpenRouter]     = useState(false)
 
   useEffect(() => {
     getModels().then(res => {
@@ -220,9 +277,7 @@ function SearchView({ onResults }: {
     if (!topic.trim()) { setError('Please enter a topic.'); return }
     setError(''); setLoading(true)
     try {
-      // Upload goes directly to processing — no selection step needed
       const result = await uploadPaper(file, topic.trim())
-      // Wrap as PaperPreview so App can route to processing directly
       onResults([{
         paper_id: result.paper.paper_id, source: 'local',
         title: result.paper.title ?? file.name, abstract: result.paper.abstract ?? '',
@@ -255,7 +310,6 @@ function SearchView({ onResults }: {
           <p style={{ color: 'var(--text-2)', fontSize: '0.9375rem' }}>Search papers, review them, then choose which ones to explore.</p>
         </div>
 
-        {/* Model picker */}
         {isOpenRouter && models.length > 0 && (
           <div className="card" style={{ padding: '16px', marginBottom: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
@@ -280,7 +334,6 @@ function SearchView({ onResults }: {
           </div>
         )}
 
-        {/* Mode toggle */}
         <div style={{ display: 'flex', background: 'var(--bg-2)', borderRadius: 'var(--radius)', padding: '3px', marginBottom: '20px', border: '1px solid var(--border)' }}>
           {(['search', 'upload'] as const).map(m => (
             <button key={m} onClick={() => { setMode(m); setError('') }}
@@ -292,7 +345,6 @@ function SearchView({ onResults }: {
 
         <div className="card" style={{ padding: '24px' }}>
           <form onSubmit={mode === 'search' ? handleSearch : handleUpload}>
-
             <div style={{ marginBottom: '16px' }}>
               <label className="label">{mode === 'search' ? 'Topic or keywords' : 'Topic label'}</label>
               <input className={`input ${topicError ? 'error' : ''}`} value={topic} onChange={e => { setTopic(e.target.value); setError('') }} placeholder={mode === 'search' ? 'e.g. large language models, RAG' : 'e.g. transformer architecture'} maxLength={200} />
@@ -318,24 +370,19 @@ function SearchView({ onResults }: {
                   </div>
                 </div>
 
-                {/* Refine results — collapsible */}
                 <div style={{ marginBottom: '20px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
                   <button type="button" onClick={() => setShowRefine(o => !o)}
                     style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--bg-3)', border: 'none', cursor: 'pointer', color: 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{ fontWeight: 500 }}>Refine results</span>
                       {activeFilters.length > 0 && !showRefine && (
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>
-                          · {activeFilters.join(' · ')}
-                        </span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>· {activeFilters.join(' · ')}</span>
                       )}
                     </div>
                     <IconChevron open={showRefine} />
                   </button>
-
                   {showRefine && (
                     <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      {/* Sort by */}
                       <div>
                         <label className="label">Sort by</label>
                         <select className="select" value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}>
@@ -343,22 +390,16 @@ function SearchView({ onResults }: {
                           <option value="relevance">Most relevant</option>
                         </select>
                       </div>
-
-                      {/* arXiv category — only shown when source includes arxiv */}
                       {source !== 'pubmed' && (
                         <div>
                           <label className="label">arXiv category</label>
                           <select className="select" value={category} onChange={e => setCategory(e.target.value)}>
                             {ARXIV_CATEGORIES.map((c, i) => (
-                              <option key={i} value={c.value} disabled={c.disabled as boolean | undefined}>
-                                {c.label}
-                              </option>
+                              <option key={i} value={c.value} disabled={c.disabled as boolean | undefined}>{c.label}</option>
                             ))}
                           </select>
                         </div>
                       )}
-
-                      {/* Date range */}
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                         <div>
                           <label className="label">From date</label>
@@ -369,14 +410,10 @@ function SearchView({ onResults }: {
                           <input className="input" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
                         </div>
                       </div>
-
-                      {/* Must-include keyword */}
                       <div>
                         <label className="label">Must include keyword</label>
                         <input className="input" value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="e.g. interpretability, fine-tuning" />
                       </div>
-
-                      {/* Clear filters */}
                       {activeFilters.length > 0 && (
                         <button type="button" className="btn btn-ghost btn-sm"
                           onClick={() => { setSortBy('date'); setCategory(''); setDateFrom(''); setDateTo(''); setKeyword('') }}>
@@ -418,29 +455,17 @@ function SearchView({ onResults }: {
 // VIEW 2: Paper Selection
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Source badge colors
-const SOURCE_COLORS: Record<string, { bg: string; color: string; label: string }> = {
-  arxiv:  { bg: 'rgba(180,120,255,0.15)', color: '#c084fc', label: 'arXiv' },
-  pubmed: { bg: 'rgba(59,130,246,0.15)',  color: '#60a5fa', label: 'PubMed' },
-  local:  { bg: 'rgba(16,185,129,0.15)',  color: 'var(--accent)', label: 'Local' },
-}
-
-function PaperSelectionCard({
-  paper,
-  selected,
-  onToggle,
-}: {
+function PaperSelectionCard({ paper, selected, onToggle }: {
   paper: PaperPreview
   selected: boolean
   onToggle: () => void
 }) {
-  const [summary, setSummary]       = useState<string | null>(null)
+  const [summary, setSummary]               = useState<string | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [showFullAbstract, setShowFullAbstract] = useState(false)
-  const srcStyle = SOURCE_COLORS[paper.source] ?? SOURCE_COLORS.local
+  const srcStyle  = SOURCE_COLORS[paper.source] ?? SOURCE_COLORS.local
   const canProcess = paper.has_pdf || paper.source !== 'pubmed'
 
-  // Generate AI summary on mount (staggered by parent)
   useEffect(() => {
     if (!paper.abstract) { setSummary(truncateAbstract(paper.abstract || '', 2)); return }
     setSummaryLoading(true)
@@ -453,94 +478,42 @@ function PaperSelectionCard({
     })
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(data => {
-        // The followup endpoint returns questions; we're repurposing it for summaries.
-        // The LLM returns a JSON array — take the joined text as the summary.
         const qs: string[] = data.questions ?? []
-        if (qs.length > 0) {
-          setSummary(qs.join(' '))
-        } else {
-          setSummary(truncateAbstract(paper.abstract, 2))
-        }
+        setSummary(qs.length > 0 ? qs.join(' ') : truncateAbstract(paper.abstract, 2))
       })
       .catch(() => setSummary(truncateAbstract(paper.abstract, 2)))
       .finally(() => setSummaryLoading(false))
   }, [paper.paper_id])
 
   return (
-    <div className="card fade-in" style={{
-      marginBottom: '12px',
-      border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
-      background: selected ? 'rgba(16,185,129,0.04)' : 'var(--bg-2)',
-      transition: 'all 0.15s',
-    }}>
+    <div className="card fade-in" style={{ marginBottom: '12px', border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, background: selected ? 'rgba(16,185,129,0.04)' : 'var(--bg-2)', transition: 'all 0.15s' }}>
       <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
-
-        {/* Select toggle */}
         <div style={{ flexShrink: 0, paddingTop: '2px' }}>
-          <button onClick={onToggle}
-            disabled={!canProcess}
-            title={!canProcess ? 'Abstract only — chat unavailable' : undefined}
-            style={{
-              width: '22px', height: '22px', borderRadius: '6px',
-              border: `2px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
-              background: selected ? 'var(--accent)' : 'transparent',
-              cursor: canProcess ? 'pointer' : 'not-allowed',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexShrink: 0, transition: 'all 0.15s',
-              opacity: canProcess ? 1 : 0.4,
-            }}>
-            {selected && (
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            )}
+          <button onClick={onToggle} disabled={!canProcess} title={!canProcess ? 'Abstract only — chat unavailable' : undefined}
+            style={{ width: '22px', height: '22px', borderRadius: '6px', border: `2px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, background: selected ? 'var(--accent)' : 'transparent', cursor: canProcess ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.15s', opacity: canProcess ? 1 : 0.4 }}>
+            {selected && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
           </button>
         </div>
-
-        {/* Content */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          {/* Header row */}
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.7rem', fontWeight: 600, padding: '2px 8px', borderRadius: '12px', background: srcStyle.bg, color: srcStyle.color, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
-              {srcStyle.label}
-            </span>
+            <span style={{ fontSize: '0.7rem', fontWeight: 600, padding: '2px 8px', borderRadius: '12px', background: srcStyle.bg, color: srcStyle.color, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>{srcStyle.label}</span>
             {!paper.has_pdf && paper.source === 'pubmed' && (
-              <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '12px', background: 'var(--warn-bg)', color: 'var(--warn)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
-                Abstract only
-              </span>
+              <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '12px', background: 'var(--warn-bg)', color: 'var(--warn)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>Abstract only</span>
             )}
-            {paper.published && (
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-                {paper.published.slice(0, 10)}
-              </span>
-            )}
+            {paper.published && <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{paper.published.slice(0, 10)}</span>}
           </div>
-
-          {/* Title */}
-          <p style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--text)', lineHeight: 1.4, marginBottom: '6px' }}>
-            {paper.title || paper.paper_id}
-          </p>
-
-          {/* Authors */}
+          <p style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--text)', lineHeight: 1.4, marginBottom: '6px' }}>{paper.title || paper.paper_id}</p>
           {paper.authors.length > 0 && (
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', marginBottom: '8px' }}>
               {paper.authors.slice(0, 3).join(', ')}{paper.authors.length > 3 ? ' et al.' : ''}
             </p>
           )}
-
-          {/* AI summary */}
           <div style={{ fontSize: '0.875rem', color: 'var(--text-2)', lineHeight: 1.6, marginBottom: '8px' }}>
-            {summaryLoading ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Spinner size="spinner-sm" />
-                <span style={{ color: 'var(--text-3)', fontSize: '0.8125rem' }}>Summarising…</span>
-              </div>
-            ) : (
-              <span>{summary ?? truncateAbstract(paper.abstract, 2)}</span>
-            )}
+            {summaryLoading
+              ? <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Spinner size="spinner-sm" /><span style={{ color: 'var(--text-3)', fontSize: '0.8125rem' }}>Summarising…</span></div>
+              : <span>{summary ?? truncateAbstract(paper.abstract, 2)}</span>
+            }
           </div>
-
-          {/* Show original abstract toggle */}
           {paper.abstract && (
             <div>
               <button type="button" onClick={() => setShowFullAbstract(o => !o)}
@@ -554,8 +527,6 @@ function PaperSelectionCard({
               )}
             </div>
           )}
-
-          {/* Journal / DOI */}
           {(paper.journal || paper.doi) && (
             <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: '6px', fontFamily: 'var(--font-mono)' }}>
               {paper.journal}{paper.journal && paper.doi ? ' · ' : ''}{paper.doi ? `DOI: ${paper.doi}` : ''}
@@ -588,7 +559,6 @@ function SelectionView({ papers, onSelect, onBack }: {
   function selectAll() {
     setSelected(new Set(papers.filter(p => p.has_pdf || p.source !== 'pubmed').map(p => p.paper_id)))
   }
-
   function deselectAll() { setSelected(new Set()) }
 
   async function handleProcess() {
@@ -608,59 +578,34 @@ function SelectionView({ papers, onSelect, onBack }: {
   return (
     <div style={{ minHeight: '100vh', padding: '32px 24px' }}>
       <div style={{ maxWidth: '760px', margin: '0 auto' }}>
-
-        {/* Header */}
         <div style={{ marginBottom: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
             <div>
-              <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '4px' }}>
-                Select papers to process
-              </h2>
-              <p style={{ color: 'var(--text-3)', fontSize: '0.875rem' }}>
-                {papers.length} result{papers.length !== 1 ? 's' : ''} found · {selected.size} selected
-              </p>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '4px' }}>Select papers to process</h2>
+              <p style={{ color: 'var(--text-3)', fontSize: '0.875rem' }}>{papers.length} result{papers.length !== 1 ? 's' : ''} · {selected.size} selected</p>
             </div>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <button className="btn btn-ghost btn-sm" onClick={onBack}>← New search</button>
               <button className="btn btn-ghost btn-sm" onClick={selected.size === processable.length ? deselectAll : selectAll}>
                 {selected.size === processable.length ? 'Deselect all' : 'Select all'}
               </button>
-              <button className="btn btn-primary" onClick={handleProcess}
-                disabled={selected.size === 0 || loading}
-                style={{ minWidth: '140px' }}>
-                {loading
-                  ? <><Spinner />Starting…</>
-                  : selected.size === 0
-                  ? 'Select papers'
-                  : `Process ${selected.size} paper${selected.size !== 1 ? 's' : ''}`
-                }
+              <button className="btn btn-primary" onClick={handleProcess} disabled={selected.size === 0 || loading} style={{ minWidth: '140px' }}>
+                {loading ? <><Spinner />Starting…</> : selected.size === 0 ? 'Select papers' : `Process ${selected.size} paper${selected.size !== 1 ? 's' : ''}`}
               </button>
             </div>
           </div>
-
-          {/* Progress bar for selection count */}
           <div style={{ height: '3px', background: 'var(--border)', borderRadius: '2px', overflow: 'hidden' }}>
             <div style={{ height: '100%', background: 'var(--accent)', borderRadius: '2px', width: `${processable.length ? (selected.size / processable.length) * 100 : 0}%`, transition: 'width 0.3s ease' }} />
           </div>
         </div>
-
         {error && <div className="notice notice-error" style={{ marginBottom: '16px' }}>{error}</div>}
-
-        {/* Paper cards — summaries generated staggered 400ms apart */}
-        {papers.map((paper, i) => (
-          <div key={paper.paper_id} style={{ animationDelay: `${i * 60}ms` }}>
-            <PaperSelectionCard
-              paper={paper}
-              selected={selected.has(paper.paper_id)}
-              onToggle={() => toggle(paper.paper_id)}
-            />
+        {papers.map(paper => (
+          <div key={paper.paper_id}>
+            <PaperSelectionCard paper={paper} selected={selected.has(paper.paper_id)} onToggle={() => toggle(paper.paper_id)} />
           </div>
         ))}
-
         {papers.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-3)' }}>
-            No papers found. Try a different topic or adjust your filters.
-          </div>
+          <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-3)' }}>No papers found.</div>
         )}
       </div>
     </div>
@@ -715,40 +660,19 @@ function ProcessingView({ papers, onDone }: {
     papers.forEach(paper => {
       const es = new EventSource(`${BACKEND}/api/papers/${paper.paper_id}/progress`)
       esRefs.current[paper.paper_id] = es
-
       es.addEventListener('progress', (e: MessageEvent) => {
-        try {
-          const data = JSON.parse(e.data)
-          update(paper.paper_id, { sseStage: data.stage, sseMessage: data.message ?? '' })
-        } catch { /* ignore */ }
+        try { const d = JSON.parse(e.data); update(paper.paper_id, { sseStage: d.stage, sseMessage: d.message ?? '' }) } catch { /* ignore */ }
       })
-
       es.addEventListener('done', (e: MessageEvent) => {
         try {
-          const data = JSON.parse(e.data)
-          update(paper.paper_id, {
-            sseStage:       data.success ? 'processed' : 'failed_processing',
-            sseMessage:     data.message ?? (data.success ? 'Ready' : data.error ?? 'Failed'),
-            pipeline_stage: data.success ? 'processed' : 'failed_processing',
-            chunk_count:    data.chunk_count ?? paper.chunk_count,
-            error_message:  data.success ? null : (data.error ?? 'Processing failed'),
-          })
+          const d = JSON.parse(e.data)
+          update(paper.paper_id, { sseStage: d.success ? 'processed' : 'failed_processing', sseMessage: d.message ?? (d.success ? 'Ready' : d.error ?? 'Failed'), pipeline_stage: d.success ? 'processed' : 'failed_processing', chunk_count: d.chunk_count ?? paper.chunk_count, error_message: d.success ? null : (d.error ?? 'Processing failed') })
         } catch { /* ignore */ }
-        es.close()
-        delete esRefs.current[paper.paper_id]
+        es.close(); delete esRefs.current[paper.paper_id]
       })
-
-      es.onerror = () => {
-        update(paper.paper_id, { sseStage: paper.pipeline_stage })
-        es.close()
-        delete esRefs.current[paper.paper_id]
-      }
+      es.onerror = () => { update(paper.paper_id, { sseStage: paper.pipeline_stage }); es.close(); delete esRefs.current[paper.paper_id] }
     })
-
-    return () => {
-      Object.values(esRefs.current).forEach(es => es.close())
-      esRefs.current = {}
-    }
+    return () => { Object.values(esRefs.current).forEach(es => es.close()); esRefs.current = {} }
   }, [papers, update])
 
   useEffect(() => {
@@ -777,9 +701,7 @@ function ProcessingView({ papers, onDone }: {
             <div style={{ height: '100%', background: 'var(--accent)', borderRadius: '2px', width: `${list.length ? (doneCount / list.length) * 100 : 0}%`, transition: 'width 0.4s ease' }} />
           </div>
         </div>
-
         {list.map(paper => <PaperCard key={paper.paper_id} paper={paper} />)}
-
         {allDone && (
           <div style={{ textAlign: 'center', marginTop: '24px' }} className="fade-in">
             <p style={{ color: 'var(--text-2)', marginBottom: '12px', fontSize: '0.9375rem' }}>
@@ -823,21 +745,14 @@ function GenerationPanel({ paperId }: { paperId: string }) {
         const es = new EventSource(`${BACKEND}/api/generate/${qk}/progress`)
         esRef.current = es
         es.addEventListener('completed', async () => {
-          try {
-            const hist = await generationHistory(paperId, platform)
-            const latest = hist.items[0] ?? null
-            setResult(latest)
-            if (latest) { const links = await getShareLinks(latest.id); setShareLinks(links) }
-          } catch { /* ignore */ }
+          try { const hist = await generationHistory(paperId, platform); const latest = hist.items[0] ?? null; setResult(latest); if (latest) { const links = await getShareLinks(latest.id); setShareLinks(links) } } catch { /* ignore */ }
         })
         es.addEventListener('done', (e: MessageEvent) => {
-          try { const d = JSON.parse(e.data); if (!d.success && d.error) reject(new Error(d.error)); else resolve() }
-          catch { resolve() }
+          try { const d = JSON.parse(e.data); if (!d.success && d.error) reject(new Error(d.error)); else resolve() } catch { resolve() }
           es.close()
         })
         es.addEventListener('failed', (e: MessageEvent) => {
-          try { reject(new Error(JSON.parse(e.data).error ?? 'Generation failed')) }
-          catch { reject(new Error('Generation failed')) }
+          try { reject(new Error(JSON.parse(e.data).error ?? 'Generation failed')) } catch { reject(new Error('Generation failed')) }
           es.close()
         })
         es.onerror = () => { reject(new Error('SSE connection lost')); es.close() }
@@ -915,7 +830,6 @@ function GenerationPanel({ paperId }: { paperId: string }) {
         <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generate content</span>
         <IconChevron open={open} />
       </button>
-
       {open && (
         <div style={{ padding: '14px 16px' }}>
           <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
@@ -1010,22 +924,223 @@ function FollowUpSuggestions({ lastResponse, onSelect }: {
         <IconSparkle />
         <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontWeight: 500 }}>Suggested follow-ups</span>
       </div>
-      {loading ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Spinner size="spinner-sm" /><span style={{ fontSize: '0.8125rem', color: 'var(--text-3)' }}>Thinking…</span>
+      {loading
+        ? <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Spinner size="spinner-sm" /><span style={{ fontSize: '0.8125rem', color: 'var(--text-3)' }}>Thinking…</span></div>
+        : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {questions.map((q, i) => (
+              <button key={i} onClick={() => onSelect(q)}
+                style={{ textAlign: 'left', padding: '8px 12px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.4, transition: 'all 0.15s' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-2)' }}>
+                {q}
+              </button>
+            ))}
+          </div>
+        )
+      }
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chat History Sidebar
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SessionSidebar({
+  sessions,
+  activeSessionId,
+  onSelect,
+  onDelete,
+  onNewSearch,
+}: {
+  sessions:        Session[]
+  activeSessionId: string | null
+  onSelect:        (sessionId: string) => void
+  onDelete:        (sessionId: string) => void
+  onNewSearch:     () => void
+}) {
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [deleting, setDeleting]           = useState<string | null>(null)
+
+  async function handleDelete(sessionId: string) {
+    setDeleting(sessionId)
+    try {
+      await deleteSession(sessionId)
+      onDelete(sessionId)
+    } catch { /* non-critical — parent will still remove from list */ }
+    finally { setDeleting(null); setConfirmDelete(null) }
+  }
+
+  const groups = groupSessions(sessions)
+
+  return (
+    <div style={{
+      width: '260px', flexShrink: 0,
+      background: 'var(--bg-2)',
+      borderRight: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column',
+      overflow: 'hidden',
+    }}>
+      {/* Header */}
+      <div style={{ padding: '16px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', flexShrink: 0 }} />
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', letterSpacing: '0.08em' }}>RESEARCHRAG</span>
         </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {questions.map((q, i) => (
-            <button key={i} onClick={() => onSelect(q)}
-              style={{ textAlign: 'left', padding: '8px 12px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.4, transition: 'all 0.15s' }}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text)' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-2)' }}>
-              {q}
-            </button>
-          ))}
-        </div>
-      )}
+        <button className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>
+          + New search
+        </button>
+      </div>
+
+      {/* Session list */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+        {sessions.length === 0 && (
+          <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', padding: '16px 8px', textAlign: 'center', lineHeight: 1.6 }}>
+            No sessions yet.<br />Search for a paper to get started.
+          </p>
+        )}
+
+        {groups.map(group => (
+          <div key={group.label}>
+            {/* Date group header */}
+            <p style={{
+              fontSize: '0.6875rem', fontWeight: 600, color: 'var(--text-3)',
+              textTransform: 'uppercase', letterSpacing: '0.08em',
+              padding: '8px 8px 4px',
+            }}>
+              {group.label}
+            </p>
+
+            {group.sessions.map(s => {
+              const isActive    = s.session_id === activeSessionId
+              const isConfirm   = confirmDelete === s.session_id
+              const isDeleting  = deleting === s.session_id
+              const srcStyle    = SOURCE_COLORS[s.title ? 'arxiv' : 'local'] // fallback
+              const displayTitle = s.title || s.topic || s.session_id
+
+              return (
+                <div key={s.session_id}
+                  style={{
+                    position: 'relative',
+                    borderRadius: 'var(--radius)',
+                    marginBottom: '2px',
+                    background: isActive ? 'var(--bg-3)' : 'transparent',
+                    border: `1px solid ${isActive ? 'var(--border-2)' : 'transparent'}`,
+                    transition: 'all 0.12s',
+                  }}
+                  onMouseEnter={e => {
+                    if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-3)'
+                  }}
+                  onMouseLeave={e => {
+                    if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'transparent'
+                  }}
+                >
+                  {/* Session button */}
+                  <button
+                    onClick={() => onSelect(s.session_id)}
+                    style={{
+                      width: '100%', textAlign: 'left',
+                      padding: '9px 32px 9px 10px',
+                      background: 'transparent', border: 'none',
+                      cursor: 'pointer', borderRadius: 'var(--radius)',
+                    }}
+                  >
+                    {/* Title */}
+                    <p style={{
+                      fontSize: '0.875rem', fontWeight: isActive ? 600 : 400,
+                      color: isActive ? 'var(--text)' : 'var(--text-2)',
+                      overflow: 'hidden', textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap', marginBottom: '3px',
+                      lineHeight: 1.3,
+                    }}>
+                      {displayTitle}
+                    </p>
+
+                    {/* Meta row: level badge + relative time */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{
+                        fontSize: '0.6875rem', fontFamily: 'var(--font-mono)',
+                        color: isActive ? 'var(--accent)' : 'var(--text-3)',
+                        background: isActive ? 'var(--accent-glow)' : 'transparent',
+                        padding: isActive ? '1px 5px' : '0',
+                        borderRadius: '8px',
+                      }}>
+                        {s.level}
+                      </span>
+                      <span style={{ fontSize: '0.6875rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                        {relativeTime(s.last_active_at)}
+                      </span>
+                    </div>
+                  </button>
+
+                  {/* Delete button — shown on hover via CSS sibling trick via state */}
+                  {!isConfirm && (
+                    <button
+                      onClick={e => { e.stopPropagation(); setConfirmDelete(s.session_id) }}
+                      title="Delete session"
+                      style={{
+                        position: 'absolute', top: '50%', right: '6px',
+                        transform: 'translateY(-50%)',
+                        width: '22px', height: '22px',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'transparent', border: 'none', cursor: 'pointer',
+                        color: 'var(--text-3)', borderRadius: '4px',
+                        opacity: isActive ? 1 : 0,
+                        transition: 'opacity 0.15s, color 0.15s',
+                      }}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLButtonElement).style.color = 'var(--error)'
+                        // Show on hover via parent hover
+                        const parent = (e.currentTarget as HTMLButtonElement).parentElement
+                        if (parent) (e.currentTarget as HTMLButtonElement).style.opacity = '1'
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-3)'
+                        if (!isActive) (e.currentTarget as HTMLButtonElement).style.opacity = '0'
+                      }}
+                    >
+                      <IconTrash />
+                    </button>
+                  )}
+
+                  {/* Inline confirm delete */}
+                  {isConfirm && (
+                    <div className="fade-in" style={{
+                      position: 'absolute', inset: 0,
+                      background: 'var(--bg-3)',
+                      borderRadius: 'var(--radius)',
+                      display: 'flex', alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '0 10px', gap: '6px',
+                      border: '1px solid var(--error-bg)',
+                    }}>
+                      <span style={{ fontSize: '0.8125rem', color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+                        Delete?
+                      </span>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button
+                          onClick={e => { e.stopPropagation(); handleDelete(s.session_id) }}
+                          disabled={isDeleting}
+                          style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: 'none', background: 'var(--error)', color: '#fff', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                        >
+                          {isDeleting ? '…' : 'Yes'}
+                        </button>
+                        <button
+                          onClick={e => { e.stopPropagation(); setConfirmDelete(null) }}
+                          style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                        >
+                          No
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -1034,7 +1149,10 @@ function FollowUpSuggestions({ lastResponse, onSelect }: {
 // VIEW 4: Chat
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNewSearch: () => void }) {
+function ChatView({ initialPapers, onNewSearch }: {
+  initialPapers: Paper[]
+  onNewSearch: () => void
+}) {
   const [sessions, setSessions]           = useState<Session[]>([])
   const [activeSession, setActiveSession] = useState<SessionDetail | null>(null)
   const [messages, setMessages]           = useState<Message[]>([])
@@ -1055,7 +1173,9 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
     try {
       const res = await listSessions()
       setSessions(res.sessions)
-      if (res.sessions.length > 0 && !activeSession) await openSession(res.sessions[0].session_id)
+      if (res.sessions.length > 0 && !activeSession) {
+        await openSession(res.sessions[0].session_id)
+      }
     } catch { /* non-critical */ }
   }
 
@@ -1078,7 +1198,19 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
     }
   }
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+  function handleSessionDeleted(sessionId: string) {
+    setSessions(prev => prev.filter(s => s.session_id !== sessionId))
+    // If the deleted session was active, clear the chat area
+    if (activeSession?.session_id === sessionId) {
+      setActiveSession(null)
+      setMessages([])
+      setActivePaper(null)
+    }
+  }
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault()
@@ -1095,6 +1227,12 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
       const res = await sendMessage(activeSession.session_id, text, level)
       const assistantMsg: Message = { id: Date.now() + 1, role: 'assistant', content: res.response, level, created_at: null }
       setMessages(prev => [...prev, assistantMsg])
+      // Refresh session list to update last_active_at in sidebar
+      setSessions(prev => prev.map(s =>
+        s.session_id === activeSession.session_id
+          ? { ...s, last_active_at: new Date().toISOString() }
+          : s
+      ))
     } catch (err: unknown) {
       setChatError(err instanceof Error ? err.message : 'Message failed.')
       setMessages(prev => prev.filter(m => m.id !== tempMsg.id))
@@ -1104,43 +1242,40 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
 
   async function handleLevelChange(newLevel: Level) {
     setLevel(newLevel)
-    if (activeSession) { try { await updateLevel(activeSession.session_id, newLevel) } catch { /* non-critical */ } }
+    if (activeSession) {
+      try { await updateLevel(activeSession.session_id, newLevel) } catch { /* non-critical */ }
+    }
   }
 
   const paperIsReady = activePaper?.pipeline_stage === 'processed' && (activePaper?.chunk_count ?? 0) > 0
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      {/* Sidebar */}
-      <div style={{ width: '260px', flexShrink: 0, background: 'var(--bg-2)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ padding: '16px', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', flexShrink: 0 }} />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', letterSpacing: '0.08em' }}>RESEARCHRAG</span>
-          </div>
-          <button className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>+ New search</button>
-        </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-          {sessError && <div className="notice notice-error" style={{ margin: '8px' }}>{sessError}</div>}
-          {sessions.length === 0 && <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', padding: '12px 8px', textAlign: 'center' }}>No sessions yet</p>}
-          {sessions.map(s => (
-            <button key={s.session_id} onClick={() => openSession(s.session_id)}
-              style={{ width: '100%', textAlign: 'left', padding: '10px', borderRadius: 'var(--radius)', border: 'none', cursor: 'pointer', background: activeSession?.session_id === s.session_id ? 'var(--bg-3)' : 'transparent', color: activeSession?.session_id === s.session_id ? 'var(--text)' : 'var(--text-2)', marginBottom: '2px', transition: 'all 0.12s' }}>
-              <p style={{ fontSize: '0.875rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '2px' }}>{s.topic ?? s.session_id}</p>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{s.level}</p>
-            </button>
-          ))}
-        </div>
-      </div>
 
-      {/* Main */}
+      {/* ── Chat history sidebar ── */}
+      <SessionSidebar
+        sessions={sessions}
+        activeSessionId={activeSession?.session_id ?? null}
+        onSelect={openSession}
+        onDelete={handleSessionDeleted}
+        onNewSearch={onNewSearch}
+      />
+
+      {/* ── Main chat area ── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+
+        {/* Header */}
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', flexShrink: 0, gap: '12px' }}>
           <div style={{ minWidth: 0 }}>
             <p style={{ fontWeight: 600, fontSize: '0.9375rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {activeSession?.topic ?? activePaper?.title ?? 'Select a session'}
+              {activeSession?.title ?? activeSession?.topic ?? activePaper?.title ?? 'Select a session'}
             </p>
-            {activePaper && <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{activePaper.source} · {activePaper.chunk_count} chunks</p>}
+            {activePaper && (
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                {activePaper.source} · {activePaper.chunk_count} chunks
+              </p>
+            )}
+            {sessError && <p style={{ fontSize: '0.8125rem', color: 'var(--error)' }}>{sessError}</p>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
             <div style={{ display: 'flex', gap: '4px' }}>
@@ -1158,7 +1293,10 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
           </div>
         </div>
 
+        {/* Body */}
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+
+          {/* Messages */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
               {!activeSession && (
@@ -1168,6 +1306,7 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
                   </p>
                 </div>
               )}
+
               {messages.map((msg, i) => (
                 <div key={msg.id ?? i} className="fade-in" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: '14px' }}>
                   <div style={{ maxWidth: '72%', padding: '10px 14px', borderRadius: 'var(--radius-lg)', background: msg.role === 'user' ? 'var(--accent)' : 'var(--bg-3)', color: msg.role === 'user' ? '#fff' : 'var(--text)', fontSize: '0.9rem', lineHeight: 1.6, borderBottomRightRadius: msg.role === 'user' ? '4px' : undefined, borderBottomLeftRadius: msg.role === 'assistant' ? '4px' : undefined }}>
@@ -1175,28 +1314,39 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
                   </div>
                 </div>
               ))}
+
               {sending && (
                 <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '14px' }}>
                   <div style={{ padding: '10px 14px', borderRadius: 'var(--radius-lg)', borderBottomLeftRadius: '4px', background: 'var(--bg-3)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Spinner size="spinner-sm" /><span style={{ fontSize: '0.875rem', color: 'var(--text-3)' }}>Thinking…</span>
+                    <Spinner size="spinner-sm" />
+                    <span style={{ fontSize: '0.875rem', color: 'var(--text-3)' }}>Thinking…</span>
                   </div>
                 </div>
               )}
+
               {activeSession && !sending && lastAssistantMessage && (
                 <FollowUpSuggestions lastResponse={lastAssistantMessage} onSelect={q => submitMessage(q)} />
               )}
+
               <div ref={bottomRef} />
             </div>
 
+            {/* Input */}
             <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--bg-2)', flexShrink: 0 }}>
               {chatError && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{chatError}</div>}
               <form onSubmit={handleSend} style={{ display: 'flex', gap: '8px' }}>
-                <input className="input" value={input} onChange={e => setInput(e.target.value)} placeholder={activeSession ? 'Ask anything about this paper…' : 'Waiting for a session…'} disabled={!activeSession || sending} maxLength={2000} style={{ flex: 1 }} />
-                <button type="submit" className="btn btn-primary" disabled={!activeSession || !input.trim() || sending} style={{ flexShrink: 0 }}><IconSend /></button>
+                <input className="input" value={input} onChange={e => setInput(e.target.value)}
+                  placeholder={activeSession ? 'Ask anything about this paper…' : 'Waiting for a session…'}
+                  disabled={!activeSession || sending} maxLength={2000} style={{ flex: 1 }} />
+                <button type="submit" className="btn btn-primary"
+                  disabled={!activeSession || !input.trim() || sending} style={{ flexShrink: 0 }}>
+                  <IconSend />
+                </button>
               </form>
             </div>
           </div>
 
+          {/* Generate panel */}
           {generateOpen && (
             <div className="fade-in" style={{ width: '300px', flexShrink: 0, borderLeft: '1px solid var(--border)', overflowY: 'auto', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
               {paperIsReady
@@ -1222,15 +1372,13 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [view, setView]               = useState<View>('search')
+  const [view, setView]                   = useState<View>('search')
   const [searchResults, setSearchResults] = useState<PaperPreview[]>([])
-  const [papers, setPapers]           = useState<Paper[]>([])
+  const [papers, setPapers]               = useState<Paper[]>([])
 
   function handleSearchResults(results: PaperPreview[]) {
     setSearchResults(results)
-    // Upload goes straight to processing (paper already saved by uploadPaper)
     if (results.length === 1 && results[0].source === 'local') {
-      // Convert preview to Paper-like for ProcessingView
       setPapers([{
         paper_id: results[0].paper_id, source: 'local',
         title: results[0].title, abstract: results[0].abstract,
@@ -1245,7 +1393,6 @@ export default function App() {
   }
 
   function handleSelection(selected: PaperPreview[]) {
-    // processPapers already called — convert previews to Paper-like for ProcessingView
     setPapers(selected.map(p => ({
       paper_id: p.paper_id, source: p.source,
       title: p.title, abstract: p.abstract,
@@ -1264,7 +1411,6 @@ export default function App() {
   function handleNewSearch() {
     setSearchResults([])
     setView('search')
-    // Note: papers and sessions persist in ChatView sidebar
   }
 
   return (
