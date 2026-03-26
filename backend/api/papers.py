@@ -1,12 +1,16 @@
 """
 papers.py — Paper ingestion endpoints and the full processing pipeline task.
 
+Two-phase search flow:
+  POST /papers/search  — fetch metadata from arXiv/PubMed, return for user preview.
+                         Does NOT start the pipeline. No DB writes.
+  POST /papers/process — accept selected paper IDs, save to DB, start pipeline.
+
 Every route returns explicit success or failure — no silent failures.
 """
 
 import asyncio
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -46,10 +50,35 @@ def _get_vector_store() -> VectorStore:
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 class SearchRequest(BaseModel):
-    topic:     str            = Field(..., min_length=1, max_length=200)
-    limit:     int            = Field(10, ge=1, le=50)
-    source:    str            = Field("both")   # arxiv | pubmed | both
-    date_from: Optional[str] = None             # ISO date string YYYY-MM-DD
+    topic:     str           = Field(..., min_length=1, max_length=200)
+    limit:     int           = Field(10, ge=1, le=50)
+    source:    str           = Field("both")
+    sort_by:   str           = Field("date")
+    date_from: Optional[str] = None
+    date_to:   Optional[str] = None
+    category:  Optional[str] = None
+    keyword:   Optional[str] = None
+
+
+class ProcessRequest(BaseModel):
+    paper_ids: list[str] = Field(..., min_length=1)
+
+
+def _doc_to_preview(doc: DocumentInput) -> dict:
+    """Serialize a DocumentInput to a lightweight preview dict."""
+    return {
+        "paper_id":   doc.paper_id,
+        "source":     doc.source,
+        "title":      doc.title,
+        "abstract":   doc.abstract,
+        "authors":    doc.authors,
+        "url":        doc.url,
+        "has_pdf":    bool(doc.extra_metadata.get("pdf_url", "")),
+        "published":  doc.extra_metadata.get("published") or doc.extra_metadata.get("pub_date") or "",
+        "journal":    doc.extra_metadata.get("journal") or "",
+        "categories": doc.extra_metadata.get("categories") or [],
+        "doi":        doc.extra_metadata.get("doi") or "",
+    }
 
 
 def _paper_to_dict(paper) -> dict:
@@ -69,6 +98,27 @@ def _paper_to_dict(paper) -> dict:
     }
 
 
+# ── In-memory store for search results awaiting user selection ────────────────
+# Keyed by paper_id. Capped at 500 entries to prevent unbounded growth —
+# oldest entries are evicted when the cap is reached.
+_pending_docs: dict[str, DocumentInput] = {}
+_PENDING_CAP = 500
+
+
+def _store_pending(doc: DocumentInput) -> None:
+    """Add a doc to _pending_docs, evicting oldest entries if over cap."""
+    if len(_pending_docs) >= _PENDING_CAP:
+        # Evict oldest quarter to avoid evicting one-at-a-time on every insert
+        evict_count = _PENDING_CAP // 4
+        for key in list(_pending_docs.keys())[:evict_count]:
+            del _pending_docs[key]
+        logger.warning(
+            "Pending docs cap reached (%d) — evicted %d oldest entries.",
+            _PENDING_CAP, evict_count,
+        )
+    _pending_docs[doc.paper_id] = doc
+
+
 # ── Full pipeline background task ─────────────────────────────────────────────
 
 async def _run_pipeline(doc: DocumentInput) -> None:
@@ -79,6 +129,14 @@ async def _run_pipeline(doc: DocumentInput) -> None:
     Pushes SSE events at each stage.
     Sets failed_download or failed_processing on error.
     Never raises — all failures are caught and recorded.
+
+    PubMed full-text strategy:
+      1. If extra_metadata has a pdf_url, download the PDF (same as arXiv).
+      2. Otherwise attempt BioC JSON full-text fetch from NCBI.
+      3. If BioC returns no full text, fall back to abstract-only path.
+         Abstract-only papers are still marked processed and get a chat
+         session, but chat will return 503 (no chunks) until full text
+         becomes available.
     """
     paper_id = doc.paper_id
 
@@ -107,23 +165,66 @@ async def _run_pipeline(doc: DocumentInput) -> None:
 
         if doc.source in ("arxiv", "pubmed") and not doc.file_path:
             pdf_url = doc.extra_metadata.get("pdf_url", "").strip()
-            if not pdf_url:
-                # No PDF URL available — PubMed abstract-only path.
-                file_path = ""
-            else:
-                dest_dir = Path(cfg.DOWNLOADS_DIR) / doc.source
+
+            if pdf_url:
+                # ── Path A: PDF download (arXiv and PubMed with direct PDF) ──
+                dest_dir  = Path(cfg.DOWNLOADS_DIR) / doc.source
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 dest_path = dest_dir / f"{doc.paper_id}.pdf"
                 try:
-                    async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+                    async with httpx.AsyncClient(
+                        follow_redirects=True, timeout=60.0
+                    ) as client:
                         response = await client.get(pdf_url)
                         response.raise_for_status()
                         dest_path.write_bytes(response.content)
                     file_path = str(dest_path)
+                    logger.info(
+                        "PDF downloaded: %s → %s (%d bytes)",
+                        pdf_url, dest_path, len(response.content),
+                    )
                 except httpx.HTTPStatusError as exc:
-                    await _fail("failed_download", f"HTTP {exc.response.status_code} downloading PDF: {pdf_url}")
+                    await _fail(
+                        "failed_download",
+                        f"HTTP {exc.response.status_code} downloading PDF: {pdf_url}",
+                    )
                     return
 
+            elif doc.source == "pubmed":
+                # ── Path B: PubMed BioC JSON full-text fetch ──────────────────
+                pmid = doc.extra_metadata.get("pubmed_id", "").strip()
+
+                if pmid:
+                    await push_paper_event(paper_id, "progress", {
+                        "stage":   "downloading",
+                        "message": "Fetching full text from PubMed Central…",
+                    })
+                    bioc_dir  = Path(cfg.DOWNLOADS_DIR) / "pubmed"
+                    file_path = await pubmed_fetcher.fetch_bioc_json(
+                        pmid=pmid,
+                        paper_id=doc.paper_id,
+                        output_dir=str(bioc_dir),
+                    )
+                    if file_path:
+                        logger.info(
+                            "BioC full text fetched for %s: %s", paper_id, file_path
+                        )
+                    else:
+                        logger.info(
+                            "No full text available for %s (PMID=%s) — abstract only",
+                            paper_id, pmid,
+                        )
+                        file_path = ""
+                else:
+                    logger.warning(
+                        "PubMed paper %s has no pubmed_id in metadata — abstract only",
+                        paper_id,
+                    )
+                    file_path = ""
+            else:
+                file_path = ""
+
+            # Update DB with file_path (may be "" for abstract-only)
             async with db.session() as sess:
                 await db.upsert_paper(sess, {
                     "paper_id":  paper_id,
@@ -146,32 +247,37 @@ async def _run_pipeline(doc: DocumentInput) -> None:
 
         download_duration = time.monotonic() - t0
         async with db.session() as sess:
-            await db.log(sess, paper_id, "downloading", "completed", "Downloaded", download_duration)
+            await db.log(
+                sess, paper_id, "downloading", "completed", "Downloaded",
+                download_duration,
+            )
         await _stage("downloaded", "Download complete")
 
         # ── Stage 2: Process ───────────────────────────────────────────────────
         if not file_path:
-            # FIX: PubMed abstract-only path — mark processed but do NOT create
-            # a chat session. There are no embedded chunks to retrieve, so any
-            # chat attempt would immediately fail with "No relevant content found".
-            # The frontend filters on chunk_count > 0 to decide whether to show
-            # a session, so these papers are stored for reference only.
+            # Abstract-only path — no extractable content.
+            # Still mark processed and create a chat session so the paper
+            # appears in the sidebar. Chat will return 503 (no chunks) but
+            # the user gets a clear error rather than a missing session.
             async with db.session() as sess:
                 await db.set_stage(sess, paper_id, "processed")
                 await db.log(
                     sess, paper_id, "processing", "completed",
-                    "Abstract-only record — no PDF available for this PubMed paper. "
-                    "Chat is not available.", 0.0,
+                    "Abstract-only record — no full text available.", 0.0,
                 )
             await push_paper_event(paper_id, "done", {
                 "paper_id":    paper_id,
                 "success":     True,
                 "chunk_count": 0,
-                "message":     "Abstract saved — no full text available for this PubMed paper",
+                "message":     "Abstract saved — no full text available for this paper",
             })
-            logger.info(
-                "Pipeline complete (abstract-only): %s — no chat session created", paper_id
+            # Create session so the paper appears in the sidebar
+            await create_session(
+                paper_id,
+                doc.topic or doc.title or paper_id,
+                "beginner",
             )
+            logger.info("Pipeline complete (abstract-only): %s", paper_id)
             return
 
         await _stage("processing", "Extracting text")
@@ -185,7 +291,10 @@ async def _run_pipeline(doc: DocumentInput) -> None:
 
         chunks = chunk(extracted)
         if not chunks:
-            await _fail("failed_processing", "Chunking produced no chunks — document may be empty or image-only")
+            await _fail(
+                "failed_processing",
+                "Chunking produced no chunks — document may be empty or image-only",
+            )
             return
 
         await push_paper_event(paper_id, "progress", {
@@ -194,20 +303,28 @@ async def _run_pipeline(doc: DocumentInput) -> None:
         })
 
         vectors = await embed(chunks)
-
-        vs = _get_vector_store()
+        vs      = _get_vector_store()
         await vs.add_chunks(chunks, vectors)
 
         process_duration = time.monotonic() - t1
 
         async with db.session() as sess:
-            await db.upsert_paper(sess, {"paper_id": paper_id, "source": doc.source, "chunk_count": len(chunks)})
+            await db.upsert_paper(sess, {
+                "paper_id":    paper_id,
+                "source":      doc.source,
+                "chunk_count": len(chunks),
+            })
             await db.set_stage(sess, paper_id, "processed")
-            await db.log(sess, paper_id, "processing", "completed",
-                         f"Processed {len(chunks)} chunks", process_duration)
+            await db.log(
+                sess, paper_id, "processing", "completed",
+                f"Processed {len(chunks)} chunks", process_duration,
+            )
 
-        # Only create a chat session when there are actual chunks to retrieve
-        await create_session(paper_id, doc.topic or doc.title or paper_id, "beginner")
+        await create_session(
+            paper_id,
+            doc.topic or doc.title or paper_id,
+            "beginner",
+        )
 
         await push_paper_event(paper_id, "done", {
             "paper_id":    paper_id,
@@ -224,21 +341,14 @@ async def _run_pipeline(doc: DocumentInput) -> None:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post("/papers/search")
-async def search_papers(request: SearchRequest, background_tasks: BackgroundTasks):
+async def search_papers(request: SearchRequest):
     """
-    Search arXiv and/or PubMed and start the pipeline for each result.
-    Returns the initial paper records immediately; processing happens in the background.
-    """
-    date_from = None
-    if request.date_from:
-        try:
-            date_from = datetime.fromisoformat(request.date_from)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid date_from format: {request.date_from!r}. Use YYYY-MM-DD.",
-            )
+    Search arXiv and/or PubMed and return paper previews for user selection.
 
+    Does NOT start the pipeline or write to the database.
+    Returns paper metadata for the selection interface. The user then calls
+    POST /papers/process with the IDs of papers they want to process.
+    """
     source = request.source.lower()
     if source not in ("arxiv", "pubmed", "both"):
         raise HTTPException(
@@ -246,21 +356,104 @@ async def search_papers(request: SearchRequest, background_tasks: BackgroundTask
             detail=f"source must be arxiv, pubmed, or both. Got: {source!r}",
         )
 
+    if request.sort_by not in ("date", "relevance"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"sort_by must be 'date' or 'relevance'. Got: {request.sort_by!r}",
+        )
+
+    date_from = date_to = None
+    if request.date_from:
+        try:
+            date_from = datetime.fromisoformat(request.date_from)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date_from: {request.date_from!r}. Use YYYY-MM-DD.",
+            )
+    if request.date_to:
+        try:
+            date_to = datetime.fromisoformat(request.date_to)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date_to: {request.date_to!r}. Use YYYY-MM-DD.",
+            )
+
     docs: list[DocumentInput] = []
 
     try:
         if source in ("arxiv", "both"):
-            arxiv_docs = await arxiv_fetcher.search(request.topic, request.limit, date_from)
+            arxiv_docs = await arxiv_fetcher.search(
+                topic=request.topic,
+                limit=request.limit,
+                date_from=date_from,
+                date_to=date_to,
+                sort_by=request.sort_by,
+                category=request.category or None,
+                keyword=request.keyword or None,
+            )
             docs.extend(arxiv_docs)
 
         if source in ("pubmed", "both"):
-            pubmed_docs = await pubmed_fetcher.search(request.topic, request.limit, date_from)
+            pubmed_docs = await pubmed_fetcher.search(
+                topic=request.topic,
+                limit=request.limit,
+                date_from=date_from,
+                date_to=date_to,
+                sort_by=request.sort_by,
+                keyword=request.keyword or None,
+            )
             docs.extend(pubmed_docs)
+
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Search failed: {exc}")
 
     if not docs:
-        return {"papers": [], "message": f"No papers found for topic {request.topic!r}"}
+        return {
+            "papers":  [],
+            "message": f"No papers found for topic {request.topic!r}",
+        }
+
+    # Store docs in memory for the subsequent /process call
+    for doc in docs:
+        _store_pending(doc)
+
+    return {
+        "papers":  [_doc_to_preview(doc) for doc in docs],
+        "message": f"Found {len(docs)} papers. Select which ones to process.",
+    }
+
+
+@router.post("/papers/process")
+async def process_papers(request: ProcessRequest, background_tasks: BackgroundTasks):
+    """
+    Start the pipeline for a user-selected subset of search results.
+
+    Accepts the paper_ids the user chose from the selection interface.
+    Saves them to the database and starts background processing.
+    Returns immediately with the initial paper records.
+    """
+    if not request.paper_ids:
+        raise HTTPException(status_code=400, detail="No paper IDs provided.")
+
+    docs: list[DocumentInput] = []
+    missing: list[str] = []
+    for paper_id in request.paper_ids:
+        doc = _pending_docs.get(paper_id)
+        if doc is None:
+            missing.append(paper_id)
+        else:
+            docs.append(doc)
+
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Paper ID(s) not found in search results: {missing}. "
+                "Run POST /papers/search first."
+            ),
+        )
 
     papers = []
     async with db.session() as sess:
@@ -282,9 +475,13 @@ async def search_papers(request: SearchRequest, background_tasks: BackgroundTask
         get_or_create_paper_queue(doc.paper_id)
         background_tasks.add_task(_run_pipeline, doc)
 
+    # Clean up processed entries from pending store
+    for paper_id in request.paper_ids:
+        _pending_docs.pop(paper_id, None)
+
     return {
         "papers":  [_paper_to_dict(p) for p in papers],
-        "message": f"Found {len(docs)} papers. Processing started.",
+        "message": f"Processing started for {len(docs)} paper(s).",
     }
 
 
@@ -334,17 +531,15 @@ async def list_papers(
 ):
     """Return a filtered list of papers."""
     async with db.session() as sess:
-        papers = await db.list_papers(sess, stage=stage, source=source,
-                                      limit=limit, offset=offset)
+        papers = await db.list_papers(
+            sess, stage=stage, source=source, limit=limit, offset=offset
+        )
     return {"papers": [_paper_to_dict(p) for p in papers]}
 
 
 @router.delete("/papers/{paper_id}")
 async def delete_paper(paper_id: str):
-    """
-    Delete a paper: remove ChromaDB vectors first, then the database record.
-    Returns a clear error if the paper does not exist.
-    """
+    """Delete a paper and all related data. Returns 404 if not found."""
     async with db.session() as sess:
         paper = await db.get_paper(sess, paper_id)
 
@@ -363,4 +558,8 @@ async def delete_paper(paper_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Paper not found: {paper_id!r}")
 
-    return {"success": True, "paper_id": paper_id, "message": "Paper deleted successfully."}
+    return {
+        "success":  True,
+        "paper_id": paper_id,
+        "message":  "Paper deleted successfully.",
+    }
