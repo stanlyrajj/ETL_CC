@@ -106,15 +106,9 @@ async def _run_pipeline(doc: DocumentInput) -> None:
         t0 = time.monotonic()
 
         if doc.source in ("arxiv", "pubmed") and not doc.file_path:
-            # Fetch the PDF from the URL in extra_metadata.
-            # FIX: arXiv PDF URLs look like https://arxiv.org/pdf/2301.07041v1 —
-            # they do NOT end in ".pdf". The previous check `pdf_url.endswith(".pdf")`
-            # was always False for arXiv, causing every arXiv paper to be treated as
-            # abstract-only (file_path="") and skip extraction entirely.
-            # Correct check: any non-empty pdf_url is a valid download target.
             pdf_url = doc.extra_metadata.get("pdf_url", "").strip()
             if not pdf_url:
-                # No PDF URL available (PubMed abstract-only path)
+                # No PDF URL available — PubMed abstract-only path.
                 file_path = ""
             else:
                 dest_dir = Path(cfg.DOWNLOADS_DIR) / doc.source
@@ -157,15 +151,27 @@ async def _run_pipeline(doc: DocumentInput) -> None:
 
         # ── Stage 2: Process ───────────────────────────────────────────────────
         if not file_path:
-            # No PDF available (e.g. PubMed abstract-only) — still mark processed
+            # FIX: PubMed abstract-only path — mark processed but do NOT create
+            # a chat session. There are no embedded chunks to retrieve, so any
+            # chat attempt would immediately fail with "No relevant content found".
+            # The frontend filters on chunk_count > 0 to decide whether to show
+            # a session, so these papers are stored for reference only.
             async with db.session() as sess:
                 await db.set_stage(sess, paper_id, "processed")
-                await db.log(sess, paper_id, "processing", "completed", "No PDF — skipped extraction", 0.0)
+                await db.log(
+                    sess, paper_id, "processing", "completed",
+                    "Abstract-only record — no PDF available for this PubMed paper. "
+                    "Chat is not available.", 0.0,
+                )
             await push_paper_event(paper_id, "done", {
-                "paper_id": paper_id, "success": True,
-                "message": "Paper saved without PDF extraction",
+                "paper_id":    paper_id,
+                "success":     True,
+                "chunk_count": 0,
+                "message":     "Abstract saved — no full text available for this PubMed paper",
             })
-            await create_session(paper_id, doc.topic or doc.title or paper_id, "beginner")
+            logger.info(
+                "Pipeline complete (abstract-only): %s — no chat session created", paper_id
+            )
             return
 
         await _stage("processing", "Extracting text")
@@ -183,7 +189,7 @@ async def _run_pipeline(doc: DocumentInput) -> None:
             return
 
         await push_paper_event(paper_id, "progress", {
-            "stage": "processing",
+            "stage":   "processing",
             "message": f"Embedding {len(chunks)} chunks",
         })
 
@@ -194,14 +200,13 @@ async def _run_pipeline(doc: DocumentInput) -> None:
 
         process_duration = time.monotonic() - t1
 
-        # Update chunk count and mark processed
         async with db.session() as sess:
             await db.upsert_paper(sess, {"paper_id": paper_id, "source": doc.source, "chunk_count": len(chunks)})
             await db.set_stage(sess, paper_id, "processed")
             await db.log(sess, paper_id, "processing", "completed",
                          f"Processed {len(chunks)} chunks", process_duration)
 
-        # Auto-create a chat session for the paper
+        # Only create a chat session when there are actual chunks to retrieve
         await create_session(paper_id, doc.topic or doc.title or paper_id, "beginner")
 
         await push_paper_event(paper_id, "done", {
@@ -229,11 +234,17 @@ async def search_papers(request: SearchRequest, background_tasks: BackgroundTask
         try:
             date_from = datetime.fromisoformat(request.date_from)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid date_from format: {request.date_from!r}. Use YYYY-MM-DD.")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date_from format: {request.date_from!r}. Use YYYY-MM-DD.",
+            )
 
     source = request.source.lower()
     if source not in ("arxiv", "pubmed", "both"):
-        raise HTTPException(status_code=400, detail=f"source must be arxiv, pubmed, or both. Got: {source!r}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"source must be arxiv, pubmed, or both. Got: {source!r}",
+        )
 
     docs: list[DocumentInput] = []
 
@@ -267,9 +278,7 @@ async def search_papers(request: SearchRequest, background_tasks: BackgroundTask
             })
             papers.append(paper)
 
-    # Start pipeline for each paper
     for doc in docs:
-        # Ensure SSE queue exists before background task starts
         get_or_create_paper_queue(doc.paper_id)
         background_tasks.add_task(_run_pipeline, doc)
 
@@ -342,14 +351,12 @@ async def delete_paper(paper_id: str):
     if paper is None:
         raise HTTPException(status_code=404, detail=f"Paper not found: {paper_id!r}")
 
-    # Remove vectors from ChromaDB first
     try:
         vs = _get_vector_store()
         vs.delete_paper(paper_id)
     except Exception as exc:
         logger.warning("ChromaDB delete failed for %s: %s", paper_id, exc)
 
-    # Remove database record (cascades to sessions, social content, logs)
     async with db.session() as sess:
         deleted = await db.delete_paper(sess, paper_id)
 

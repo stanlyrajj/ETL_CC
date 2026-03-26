@@ -6,14 +6,18 @@ Docling is synchronous, so extraction runs in run_in_executor.
 
 Three-pass PDF strategy:
   Pass 1 (fast):    Docling with do_ocr=False — reads the text layer directly.
-                    Governed by DOCLING_FAST_TIMEOUT seconds (default 60).
+                    Skipped automatically for PDFs exceeding DOCLING_MAX_PAGES
+                    (default 20) since Docling is unlikely to finish within the
+                    timeout on large documents — PyMuPDF handles them instead.
+                    Governed by DOCLING_FAST_TIMEOUT seconds (default 90).
                     Accepted if it completes in time AND yields >= 200 chars.
-  Pass 2 (PyMuPDF): Triggered when Pass 1 times out OR yields < 200 chars.
+  Pass 2 (PyMuPDF): Triggered when Pass 1 times out, yields < 200 chars,
+                    or is skipped due to page count.
                     Extracts raw text from the PDF text layer in < 1 second.
                     Accepted if it yields >= 200 chars.
   Pass 3 (OCR):     Triggered only when both Pass 1 and Pass 2 fail to yield
                     enough content — indicates a scanned/image-only PDF.
-                    Runs Docling with do_ocr=True. May take minutes on CPU.
+                    Runs Docling with do_ocr=True. Last resort.
 """
 
 import asyncio
@@ -29,6 +33,11 @@ logger = logging.getLogger(__name__)
 
 _MIN_CONTENT_CHARS      = 100   # minimum to consider extraction successful
 _OCR_FALLBACK_THRESHOLD = 200   # passes yielding fewer chars trigger next fallback
+
+# PDFs with more pages than this skip Docling Pass 1 entirely and go straight
+# to PyMuPDF. Docling's neural pipeline processes page-by-page and will always
+# timeout on large documents, wasting the full timeout period before fallback.
+_DOCLING_MAX_PAGES = 20
 
 
 # ── Output types ──────────────────────────────────────────────────────────────
@@ -69,6 +78,21 @@ def _label_to_section_type(label_str: str) -> str:
     return "body"
 
 
+def _get_pdf_page_count(file_path: str) -> int:
+    """
+    Return the number of pages in a PDF using PyMuPDF.
+    Returns 0 if the count cannot be determined (PyMuPDF not installed, etc.).
+    """
+    try:
+        import fitz
+        doc = fitz.open(file_path)
+        count = len(doc)
+        doc.close()
+        return count
+    except Exception:
+        return 0
+
+
 def _sections_from_docling_doc(doc) -> list[Section]:
     """
     Extract Section objects from a Docling document object.
@@ -77,7 +101,6 @@ def _sections_from_docling_doc(doc) -> list[Section]:
     sections: list[Section] = []
     order = 0
 
-    # ── Primary: structured text items (Docling v2) ───────────────────────────
     try:
         items = []
         if hasattr(doc, "texts") and doc.texts:
@@ -102,7 +125,6 @@ def _sections_from_docling_doc(doc) -> list[Section]:
         logger.warning("Docling structured iteration failed: %s", exc)
         sections = []
 
-    # ── Fallback: export to markdown or plain text ────────────────────────────
     if not sections:
         exported_text = ""
         for export_method in ("export_to_markdown", "export_to_text"):
@@ -132,10 +154,7 @@ def _sections_from_docling_doc(doc) -> list[Section]:
 
 
 def _docling_fast_sync(file_path: str) -> list[Section]:
-    """
-    Pass 1 — Docling with OCR and table structure disabled.
-    Reads the embedded text layer only. Blocking — runs in executor.
-    """
+    """Pass 1 — Docling with OCR and table structure disabled. Blocking."""
     from docling.document_converter import DocumentConverter, PdfFormatOption
     from docling.datamodel.pipeline_options import PdfPipelineOptions
 
@@ -150,12 +169,10 @@ def _docling_fast_sync(file_path: str) -> list[Section]:
 def _pymupdf_sync(file_path: str) -> list[Section]:
     """
     Pass 2 — PyMuPDF fallback. Extracts raw text from the PDF text layer.
-    Much faster than Docling (~1s) but produces no structural labels.
-    Blocking — runs in executor.
-
+    Sub-second speed regardless of page count. Blocking.
     Requires: pip install pymupdf
     """
-    import fitz  # pymupdf
+    import fitz
 
     sections: list[Section] = []
     doc = fitz.open(file_path)
@@ -164,7 +181,6 @@ def _pymupdf_sync(file_path: str) -> list[Section]:
         text = page.get_text().strip()
         if not text:
             continue
-        # Split each page into paragraphs so chunk sizes stay manageable
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
         for para in paragraphs:
             sections.append(Section(
@@ -179,11 +195,7 @@ def _pymupdf_sync(file_path: str) -> list[Section]:
 
 
 def _docling_ocr_sync(file_path: str) -> list[Section]:
-    """
-    Pass 3 — Docling with full OCR enabled.
-    Only used for scanned/image-only PDFs where both Pass 1 and Pass 2 failed.
-    Blocking — runs in executor. May take several minutes on CPU.
-    """
+    """Pass 3 — Docling with full OCR. Last resort for scanned PDFs. Blocking."""
     from docling.document_converter import DocumentConverter, PdfFormatOption
     from docling.datamodel.pipeline_options import PdfPipelineOptions
 
@@ -197,19 +209,54 @@ def _docling_ocr_sync(file_path: str) -> list[Section]:
 
 async def _extract_pdf(file_path: str) -> list[Section]:
     """
-    Three-pass PDF extraction with timeout and PyMuPDF fallback.
+    Three-pass PDF extraction with page count check, timeout, and PyMuPDF fallback.
 
-    Pass 1: Docling fast (no OCR), timeout = DOCLING_FAST_TIMEOUT seconds.
-            Accepted if it completes in time AND yields >= _OCR_FALLBACK_THRESHOLD chars.
-    Pass 2: PyMuPDF — triggered on timeout OR insufficient chars from Pass 1.
-            Accepted if it yields >= _OCR_FALLBACK_THRESHOLD chars.
-    Pass 3: Docling OCR — triggered only when both Pass 1 and Pass 2 are insufficient.
-            Last resort for genuinely scanned PDFs.
+    Large PDFs (> _DOCLING_MAX_PAGES pages) skip Pass 1 entirely — Docling
+    processes page-by-page and will always timeout on large documents, so we
+    go directly to PyMuPDF which handles any page count in under a second.
     """
     loop    = asyncio.get_running_loop()
     timeout = float(cfg.DOCLING_FAST_TIMEOUT)
 
-    # ── Pass 1: Docling fast ──────────────────────────────────────────────────
+    # Check page count before attempting Docling
+    page_count = await loop.run_in_executor(None, _get_pdf_page_count, file_path)
+    if page_count > 0:
+        logger.info("PDF page count: %d for %s", page_count, file_path)
+
+    # Skip Docling Pass 1 for large PDFs — go straight to PyMuPDF
+    if page_count > _DOCLING_MAX_PAGES:
+        logger.info(
+            "PDF has %d pages (threshold=%d) — skipping Docling, using PyMuPDF directly: %s",
+            page_count, _DOCLING_MAX_PAGES, file_path,
+        )
+        try:
+            sections = await loop.run_in_executor(None, _pymupdf_sync, file_path)
+            pymupdf_chars = sum(len(s.content) for s in sections)
+            logger.info("PyMuPDF direct: %d chars from %s", pymupdf_chars, file_path)
+            if pymupdf_chars >= _OCR_FALLBACK_THRESHOLD:
+                return sections
+            logger.warning(
+                "PyMuPDF yielded only %d chars for %s — falling back to OCR.",
+                pymupdf_chars, file_path,
+            )
+        except ImportError:
+            logger.warning("PyMuPDF not installed — falling through to Docling. pip install pymupdf")
+        except Exception as exc:
+            logger.warning("PyMuPDF failed for %s: %s — falling through to OCR.", file_path, exc)
+
+        # OCR fallback for large scanned PDFs
+        logger.warning("Pass 3 (Docling OCR) for large PDF %s", file_path)
+        try:
+            sections = await loop.run_in_executor(None, _docling_ocr_sync, file_path)
+            return sections
+        except Exception as exc:
+            raise ExtractionError(
+                f"All extraction passes failed for {file_path!r}: {exc}"
+            ) from exc
+
+    # ── Normal three-pass flow for small PDFs ─────────────────────────────────
+
+    # Pass 1: Docling fast with timeout
     logger.info("Extraction pass 1 (Docling fast, timeout=%ds): %s", timeout, file_path)
     sections: list[Section] = []
 
@@ -222,7 +269,7 @@ async def _extract_pdf(file_path: str) -> list[Section]:
         logger.info("Pass 1 complete: %d chars from %s", fast_chars, file_path)
 
         if fast_chars >= _OCR_FALLBACK_THRESHOLD:
-            return sections   # ✓ fast path succeeded
+            return sections
 
         logger.warning(
             "Pass 1 yielded only %d chars (threshold=%d) for %s — trying PyMuPDF.",
@@ -230,17 +277,11 @@ async def _extract_pdf(file_path: str) -> list[Section]:
         )
 
     except asyncio.TimeoutError:
-        logger.warning(
-            "Pass 1 timed out after %ds for %s — trying PyMuPDF.",
-            timeout, file_path,
-        )
+        logger.warning("Pass 1 timed out after %ds for %s — trying PyMuPDF.", timeout, file_path)
     except Exception as exc:
-        logger.warning(
-            "Pass 1 (Docling fast) failed for %s: %s — trying PyMuPDF.",
-            file_path, exc,
-        )
+        logger.warning("Pass 1 (Docling fast) failed for %s: %s — trying PyMuPDF.", file_path, exc)
 
-    # ── Pass 2: PyMuPDF ───────────────────────────────────────────────────────
+    # Pass 2: PyMuPDF
     logger.info("Extraction pass 2 (PyMuPDF): %s", file_path)
     try:
         sections = await loop.run_in_executor(None, _pymupdf_sync, file_path)
@@ -248,7 +289,7 @@ async def _extract_pdf(file_path: str) -> list[Section]:
         logger.info("Pass 2 complete: %d chars from %s", pymupdf_chars, file_path)
 
         if pymupdf_chars >= _OCR_FALLBACK_THRESHOLD:
-            return sections   # ✓ PyMuPDF succeeded
+            return sections
 
         logger.warning(
             "Pass 2 (PyMuPDF) yielded only %d chars for %s — falling back to OCR.",
@@ -257,20 +298,14 @@ async def _extract_pdf(file_path: str) -> list[Section]:
 
     except ImportError:
         logger.warning(
-            "PyMuPDF is not installed — skipping pass 2. "
-            "Install it with: pip install pymupdf"
+            "PyMuPDF is not installed — skipping pass 2. Install with: pip install pymupdf"
         )
     except Exception as exc:
-        logger.warning(
-            "Pass 2 (PyMuPDF) failed for %s: %s — falling back to OCR.",
-            file_path, exc,
-        )
+        logger.warning("Pass 2 (PyMuPDF) failed for %s: %s — falling back to OCR.", file_path, exc)
 
-    # ── Pass 3: Docling OCR ───────────────────────────────────────────────────
+    # Pass 3: Docling OCR
     logger.warning(
-        "Extraction pass 3 (Docling OCR) for %s — "
-        "PDF may be scanned. This may take several minutes on CPU.",
-        file_path,
+        "Extraction pass 3 (Docling OCR) for %s — PDF may be scanned.", file_path
     )
     try:
         sections = await loop.run_in_executor(None, _docling_ocr_sync, file_path)
@@ -286,17 +321,12 @@ async def _extract_pdf(file_path: str) -> list[Section]:
 
 
 def _extract_bioc_sync(file_path: str) -> list[Section]:
-    """
-    Parse a PubMed BioC JSON file and return a list of Sections.
-    Blocking — runs in executor.
-    """
+    """Parse a PubMed BioC JSON file and return a list of Sections. Blocking."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError as exc:
-        raise ExtractionError(
-            f"Invalid BioC JSON in {file_path!r}: {exc}"
-        ) from exc
+        raise ExtractionError(f"Invalid BioC JSON in {file_path!r}: {exc}") from exc
 
     sections: list[Section] = []
     order = 0
