@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from chat import session as session_ops
 from chat.rag import RAGException, respond
+from database import db
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,8 @@ router = APIRouter()
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 class MessageRequest(BaseModel):
-    message: str   = Field(..., min_length=1, max_length=2000)
-    level:   str   = Field("beginner")   # beginner | intermediate | advanced
+    message: str = Field(..., min_length=1, max_length=2000)
+    level:   str = Field("beginner")
 
 
 class LevelUpdate(BaseModel):
@@ -60,7 +61,6 @@ async def send_message(session_id: str, request: MessageRequest):
     Returns 404 if the session does not exist.
     Returns 503 if RAG retrieval fails (no chunks indexed yet).
     """
-    # Check session exists first for a clear 404
     session = await session_ops.get_session(session_id)
     if session is None:
         raise HTTPException(
@@ -110,4 +110,41 @@ async def update_level(session_id: str, request: LevelUpdate):
         "session_id": session_id,
         "level":      request.level,
         "message":    f"Level updated to {request.level!r}.",
+    }
+
+
+@router.delete("/chat/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """
+    Delete a single chat session and all its messages.
+    Does NOT delete the parent paper or its vectors — the paper remains
+    available for future chat sessions.
+    Returns 404 if the session does not exist.
+    """
+    session = await session_ops.get_session(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session not found: {session_id!r}",
+        )
+
+    async with db.session() as sess:
+        from sqlalchemy import delete as sql_delete
+        from database import ChatSession
+        result = await sess.execute(
+            sql_delete(ChatSession).where(ChatSession.session_id == session_id)
+        )
+        deleted = result.rowcount > 0
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session not found: {session_id!r}",
+        )
+
+    logger.info("Deleted session %s", session_id)
+    return {
+        "success":    True,
+        "session_id": session_id,
+        "message":    "Session deleted successfully.",
     }
