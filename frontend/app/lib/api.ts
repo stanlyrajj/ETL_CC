@@ -29,18 +29,22 @@ export type PipelineStage =
   | 'processing' | 'processed'
   | 'failed_download' | 'failed_processing'
 
+// ── CHANGE: PaperPreview interface in api.ts ──────────────────────────────────
+// Replace the existing PaperPreview interface with this one.
+// Only has_pdf → has_full_text changed.
+
 export interface PaperPreview {
-  paper_id:   string
-  source:     string
-  title:      string
-  abstract:   string
-  authors:    string[]
-  url:        string
-  has_pdf:    boolean
-  published:  string
-  journal:    string
-  categories: string[]
-  doi:        string
+  paper_id:      string
+  source:        string
+  title:         string
+  abstract:      string
+  authors:       string[]
+  url:           string
+  has_full_text: boolean   // true if pdf_url exists OR pubmed paper has a pubmed_id
+  published:     string
+  journal:       string
+  categories:    string[]
+  doi:           string
 }
 
 export interface Paper {

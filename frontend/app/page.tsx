@@ -282,7 +282,7 @@ function SearchView({ onResults }: {
         paper_id: result.paper.paper_id, source: 'local',
         title: result.paper.title ?? file.name, abstract: result.paper.abstract ?? '',
         authors: result.paper.authors ?? [], url: result.paper.url ?? '',
-        has_pdf: true, published: '', journal: '', categories: [], doi: '',
+        has_full_text: true, published: '', journal: '', categories: [], doi: '',
       }])
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed.')
@@ -464,7 +464,7 @@ function PaperSelectionCard({ paper, selected, onToggle }: {
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [showFullAbstract, setShowFullAbstract] = useState(false)
   const srcStyle  = SOURCE_COLORS[paper.source] ?? SOURCE_COLORS.local
-  const canProcess = paper.has_pdf || paper.source !== 'pubmed'
+  const canProcess = true
 
 useEffect(() => {
   if (!paper.abstract) return   // nothing to summarise — leave summary as null
@@ -497,7 +497,7 @@ useEffect(() => {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.7rem', fontWeight: 600, padding: '2px 8px', borderRadius: '12px', background: srcStyle.bg, color: srcStyle.color, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>{srcStyle.label}</span>
-            {!paper.has_pdf && paper.source === 'pubmed' && (
+            {!paper.has_full_text && (
               <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '12px', background: 'var(--warn-bg)', color: 'var(--warn)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>Abstract only</span>
             )}
             {paper.published && <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{paper.published.slice(0, 10)}</span>}
@@ -573,7 +573,7 @@ function SelectionView({ papers, onSelect, onBack }: {
     }
   }
 
-  const processable = papers.filter(p => p.has_pdf || p.source !== 'pubmed')
+  const processable = papers
 
   return (
     <div style={{ minHeight: '100vh', padding: '32px 24px' }}>

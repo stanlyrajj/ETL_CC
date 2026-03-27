@@ -63,15 +63,23 @@ class ProcessRequest(BaseModel):
     paper_ids: list[str] = Field(..., min_length=1)
 
 
+# ── CHANGE: _doc_to_preview in papers.py ─────────────────────────────────────
+# Replace the existing _doc_to_preview function with this one.
+# Only the has_pdf → has_full_text rename and its value logic changed.
+# Everything else is identical to the original.
+
 def _doc_to_preview(doc: DocumentInput) -> dict:
     return {
-        "paper_id":   doc.paper_id,
-        "source":     doc.source,
-        "title":      doc.title,
-        "abstract":   doc.abstract,
-        "authors":    doc.authors,
-        "url":        doc.url,
-        "has_pdf":    bool(doc.extra_metadata.get("pdf_url", "")),
+        "paper_id":      doc.paper_id,
+        "source":        doc.source,
+        "title":         doc.title,
+        "abstract":      doc.abstract,
+        "authors":       doc.authors,
+        "url":           doc.url,
+        "has_full_text": bool(
+            doc.extra_metadata.get("pdf_url")
+            or (doc.source == "pubmed" and doc.extra_metadata.get("pubmed_id"))
+        ),
         "published":  doc.extra_metadata.get("published") or doc.extra_metadata.get("pub_date") or "",
         "journal":    doc.extra_metadata.get("journal") or "",
         "categories": doc.extra_metadata.get("categories") or [],
