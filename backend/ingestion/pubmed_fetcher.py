@@ -29,6 +29,7 @@ _ESUMMARY_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 _EFETCH_URL   = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 _BIOC_URL     = "https://www.ncbi.nlm.nih.gov/research/bel/api/v1/documents/pubmed/{pmid}"
 _TIMEOUT      = 30.0
+_MAX_RETRIES  = 3
 
 
 def _build_esearch_query(
@@ -95,6 +96,69 @@ def _map_summary(uid: str, summary: dict, topic: str) -> dict:
     }
 
 
+async def _request_with_retry(
+    client:  httpx.AsyncClient,
+    url:     str,
+    params:  dict,
+    label:   str,
+) -> httpx.Response:
+    """
+    GET request with exponential backoff retry on transient network errors.
+
+    Retries on:
+      - DNS resolution failures (getaddrinfo failed, Name or service not known)
+      - Connection refused / timeout
+      - HTTP 429 Too Many Requests
+      - HTTP 5xx server errors
+
+    Raises the last exception if all retries are exhausted.
+    """
+    last_exc: Exception | None = None
+
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            response = await client.get(url, params=params, timeout=_TIMEOUT)
+
+            # Retry on rate-limit or server errors
+            if response.status_code == 429 or response.status_code >= 500:
+                wait = 2 ** attempt
+                logger.warning(
+                    "%s: HTTP %d — retrying in %ds (attempt %d/%d)",
+                    label, response.status_code, wait, attempt, _MAX_RETRIES,
+                )
+                await asyncio.sleep(wait)
+                last_exc = httpx.HTTPStatusError(
+                    f"HTTP {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+                continue
+
+            response.raise_for_status()
+            return response
+
+        except (
+            httpx.ConnectError,      # DNS failure, connection refused
+            httpx.TimeoutException,  # connect or read timeout
+            httpx.RemoteProtocolError,
+        ) as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                wait = 2 ** attempt
+                logger.warning(
+                    "%s: network error on attempt %d/%d: %s — retrying in %ds",
+                    label, attempt, _MAX_RETRIES, exc, wait,
+                )
+                await asyncio.sleep(wait)
+            else:
+                logger.error(
+                    "%s: network error after %d attempts: %s",
+                    label, _MAX_RETRIES, exc,
+                )
+
+    raise last_exc
+
+
 async def _esearch(
     client:  httpx.AsyncClient,
     query:   str,
@@ -109,8 +173,7 @@ async def _esearch(
         "retmode": "json",
         "sort":    "relevance" if sort_by == "relevance" else "date",
     }
-    response = await client.get(_ESEARCH_URL, params=params, timeout=_TIMEOUT)
-    response.raise_for_status()
+    response = await _request_with_retry(client, _ESEARCH_URL, params, "eSearch")
     data = response.json()
     return data.get("esearchresult", {}).get("idlist", [])
 
@@ -125,8 +188,7 @@ async def _esummary(
         "id":      ",".join(uids),
         "retmode": "json",
     }
-    response = await client.get(_ESUMMARY_URL, params=params, timeout=_TIMEOUT)
-    response.raise_for_status()
+    response = await _request_with_retry(client, _ESUMMARY_URL, params, "eSummary")
     data = response.json()
     return data.get("result", {})
 
@@ -140,6 +202,7 @@ async def _fetch_abstracts(
 
     eSummary does not return abstracts. This fills that gap.
     Returns a dict mapping uid → abstract string.
+    Uses _request_with_retry internally — network errors return {} gracefully.
     """
     params = {
         "db":       "pubmed",
@@ -149,27 +212,22 @@ async def _fetch_abstracts(
     }
     try:
         await asyncio.sleep(cfg.PUBMED_RATE_LIMIT)
-        response = await client.get(_EFETCH_URL, params=params, timeout=_TIMEOUT)
-        response.raise_for_status()
+        response = await _request_with_retry(client, _EFETCH_URL, params, "eFetch")
         raw_text = response.text
     except Exception as exc:
         logger.warning("eFetch abstracts failed for %d UIDs: %s", len(uids), exc)
         return {}
 
-    # eFetch plain-text format separates records with blank lines between them.
-    # Each record starts with "PMID- {uid}" somewhere in the block, and the
-    # abstract follows "AB  - ". We parse this simple format directly.
-    abstracts: dict[str, str] = {}
-    current_uid: str | None   = None
+    abstracts: dict[str, str]   = {}
+    current_uid: str | None     = None
     current_ab_lines: list[str] = []
     in_abstract = False
 
     for line in raw_text.splitlines():
         if line.startswith("PMID- "):
-            # Save previous record
             if current_uid and current_ab_lines:
                 abstracts[current_uid] = " ".join(current_ab_lines).strip()
-            current_uid     = line[6:].strip()
+            current_uid      = line[6:].strip()
             current_ab_lines = []
             in_abstract      = False
 
@@ -178,14 +236,11 @@ async def _fetch_abstracts(
             current_ab_lines.append(line[6:].strip())
 
         elif in_abstract and line.startswith("      "):
-            # Continuation lines for the abstract are indented with 6 spaces
             current_ab_lines.append(line.strip())
 
         elif in_abstract and line.strip() == "":
-            # Blank line ends the abstract block
             in_abstract = False
 
-    # Save last record
     if current_uid and current_ab_lines:
         abstracts[current_uid] = " ".join(current_ab_lines).strip()
 
@@ -201,43 +256,26 @@ async def fetch_bioc_json(
     """
     Attempt to download full-text BioC JSON for a PubMed article from NCBI.
 
-    NCBI's BioC API provides full structured article text for open-access
-    PubMed Central articles. Not all PubMed articles have full text available —
-    this returns None gracefully when full text is not available.
-
-    Parameters
-    ----------
-    pmid       : PubMed ID string (digits only)
-    paper_id   : our internal paper_id, used for the output filename
-    output_dir : directory to save the JSON file (downloads/pubmed/)
-
-    Returns
-    -------
-    Path to the saved JSON file on success, None if full text is unavailable.
+    Returns the path to the saved JSON file on success, None otherwise.
     """
     url = _BIOC_URL.format(pmid=pmid)
 
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=_TIMEOUT) as client:
             await asyncio.sleep(cfg.PUBMED_RATE_LIMIT)
-            response = await client.get(url)
+            response = await _request_with_retry(client, url, {}, "BioC fetch")
 
-            # 404 means no full text available for this article — not an error
             if response.status_code == 404:
                 logger.info(
                     "No BioC full text available for PMID=%s (404) — abstract only", pmid
                 )
                 return None
 
-            response.raise_for_status()
-
-            # Validate it is actually JSON before saving
             data = response.json()
             if not data or not isinstance(data, dict):
                 logger.warning("BioC response for PMID=%s is not a valid JSON object", pmid)
                 return None
 
-            # Must have at least one document with at least one passage
             documents = data.get("documents", [])
             if not documents:
                 logger.info("BioC response for PMID=%s has no documents — abstract only", pmid)
@@ -250,7 +288,6 @@ async def fetch_bioc_json(
                 )
                 return None
 
-            # Save to disk
             dest_dir  = Path(output_dir)
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest_path = dest_dir / f"{paper_id}.json"
@@ -262,12 +299,6 @@ async def fetch_bioc_json(
             )
             return str(dest_path)
 
-    except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "BioC fetch HTTP error for PMID=%s: %s — falling back to abstract only",
-            pmid, exc,
-        )
-        return None
     except Exception as exc:
         logger.warning(
             "BioC fetch failed for PMID=%s: %s — falling back to abstract only",
@@ -290,6 +321,9 @@ async def search(
     Returns a list of validated DocumentInput objects.
     Abstracts are populated via eFetch (eSummary does not return them).
     Papers that fail validation are skipped with a warning.
+
+    Raises a descriptive RuntimeError on network failure after all retries
+    so the API layer can surface a useful 502 message to the user.
     """
     query = _build_esearch_query(topic, date_from, date_to, keyword)
     logger.info("PubMed search: query=%r limit=%d sort=%s", query, limit, sort_by)
@@ -298,9 +332,16 @@ async def search(
         await asyncio.sleep(cfg.PUBMED_RATE_LIMIT)
         try:
             uids = await _esearch(client, query, limit, sort_by)
+        except httpx.ConnectError as exc:
+            raise RuntimeError(
+                "Cannot reach PubMed (NCBI). "
+                "Check your internet connection and try again. "
+                f"Detail: {exc}"
+            ) from exc
         except Exception as exc:
-            logger.error("PubMed eSearch failed: %s", exc)
-            raise
+            raise RuntimeError(
+                f"PubMed search failed: {exc}"
+            ) from exc
 
         if not uids:
             logger.info("PubMed search returned no results.")
@@ -312,10 +353,10 @@ async def search(
         try:
             summaries = await _esummary(client, uids)
         except Exception as exc:
-            logger.error("PubMed eSummary failed: %s", exc)
-            raise
+            raise RuntimeError(
+                f"PubMed summary fetch failed: {exc}"
+            ) from exc
 
-        # Fetch abstracts via eFetch — eSummary does not return abstract text
         abstracts = await _fetch_abstracts(client, uids)
 
     documents: list[DocumentInput] = []
@@ -326,8 +367,6 @@ async def search(
             continue
 
         raw = _map_summary(uid, summary, topic)
-
-        # Populate abstract from eFetch result
         raw["abstract"] = abstracts.get(uid, "")
 
         try:
