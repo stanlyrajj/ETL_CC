@@ -466,24 +466,24 @@ function PaperSelectionCard({ paper, selected, onToggle }: {
   const srcStyle  = SOURCE_COLORS[paper.source] ?? SOURCE_COLORS.local
   const canProcess = paper.has_pdf || paper.source !== 'pubmed'
 
-  useEffect(() => {
-    if (!paper.abstract) { setSummary(truncateAbstract(paper.abstract || '', 2)); return }
-    setSummaryLoading(true)
-    fetch('/api/generate/followup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        context: `Summarize this research paper abstract in 2-3 plain sentences for a non-specialist:\n\n${paper.abstract}`,
-      }),
+useEffect(() => {
+  if (!paper.abstract) return   // nothing to summarise — leave summary as null
+  setSummaryLoading(true)
+  fetch('/api/generate/followup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      context: `Summarize this research paper abstract in 2-3 plain sentences for a non-specialist:\n\n${paper.abstract}`,
+    }),
+  })
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(data => {
+      const qs: string[] = data.questions ?? []
+      setSummary(qs.length > 0 ? qs.join(' ') : truncateAbstract(paper.abstract, 2))
     })
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(data => {
-        const qs: string[] = data.questions ?? []
-        setSummary(qs.length > 0 ? qs.join(' ') : truncateAbstract(paper.abstract, 2))
-      })
-      .catch(() => setSummary(truncateAbstract(paper.abstract, 2)))
-      .finally(() => setSummaryLoading(false))
-  }, [paper.paper_id])
+    .catch(() => setSummary(truncateAbstract(paper.abstract, 2)))
+    .finally(() => setSummaryLoading(false))
+}, [paper.paper_id])
 
   return (
     <div className="card fade-in" style={{ marginBottom: '12px', border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, background: selected ? 'rgba(16,185,129,0.04)' : 'var(--bg-2)', transition: 'all 0.15s' }}>

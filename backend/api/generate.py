@@ -128,26 +128,31 @@ async def generate_followup(request: FollowUpRequest):
     response, or produce any other single-turn LLM output (e.g. abstract
     summaries in the selection UI).
 
+
+
     This endpoint calls the LLM directly as a stateless single-turn call.
     It does NOT use chat_response() and does NOT write anything to the
     session database — no orphaned messages, no session history corruption.
 
+
+
     The prompt instructs the model to return a JSON array of 3 strings.
     Both the follow-up suggestion widget and the paper selection summary
     card use this endpoint.
+
+
 
     Returns: {"questions": ["Q1?", "Q2?", "Q3?"]}
     """
     from llm.factory import get_provider
     from llm.base import sanitize_context
 
-    provider = get_provider()
 
-    # Build a single self-contained prompt.
-    # The context is the assistant's last response (or abstract summary request).
-    # We do NOT pass it as LLM context — we embed it directly in the prompt
-    # so it is sent only once and is not double-wrapped by sanitize_context().
+
+    provider = get_provider()
     safe_context = sanitize_context(request.context)
+
+
 
     prompt = (
         "Based on the research paper content below, suggest exactly 3 short "
@@ -159,47 +164,19 @@ async def generate_followup(request: FollowUpRequest):
         f"{safe_context}"
     )
 
+
+
     try:
-        # Call the provider's generation method directly, bypassing chat_response().
-        # generate_linkedin_post() is the lightest single-turn method available —
-        # it sends one user message and returns the raw string, no history,
-        # no session, no DB writes.
-        # We parse the JSON array ourselves from whatever the model returns.
-        raw = await provider.generate_linkedin_post(
-            context=request.context,
-            title="Follow-up suggestions",
-            style=prompt,   # embed full prompt in style field
-            tone="",
-        )
-
-        # generate_linkedin_post returns a parsed dict — but here we need the
-        # raw string. Use the lower-level approach instead via the provider's
-        # internal retry mechanism directly.
-        raise NotImplementedError  # fall through to direct call below
-
-    except Exception:
-        pass
-
-    # Direct low-level call — works for all three provider types
-    try:
-        # All providers expose _with_retry / _call_sync at different shapes.
-        # The cleanest cross-provider path is to use generate_twitter_thread
-        # which accepts context+title and returns a dict we can ignore,
-        # but that still wastes tokens on tweet formatting.
-        #
-        # Cleanest solution: call chat_response with empty history and a
-        # purpose-built system boundary. This is safe because we pass
-        # history=[] so nothing is read from or written to any session.
-        # The only session writes happen inside rag.respond() — which we
-        # are NOT calling here.
         response_text = await provider.chat_response(
-            context=request.context,   # will be sanitized inside chat_response
+            context=request.context,
             title="",
             authors=[],
-            history=[],                # empty — no session involved
+            history=[],
             message=prompt,
             level="beginner",
         )
+
+
 
         match = re.search(r'\[[\s\S]*?\]', response_text)
         if match:
@@ -208,8 +185,12 @@ async def generate_followup(request: FollowUpRequest):
                 questions = [str(q).strip() for q in parsed if str(q).strip()][:3]
                 return {"questions": questions}
 
+
+
     except Exception as exc:
         logger.warning("Follow-up generation failed: %s", exc)
+
+
 
     return {"questions": []}
 
