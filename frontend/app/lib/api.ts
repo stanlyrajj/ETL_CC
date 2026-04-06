@@ -29,9 +29,7 @@ export type PipelineStage =
   | 'processing' | 'processed'
   | 'failed_download' | 'failed_processing'
 
-// ── CHANGE: PaperPreview interface in api.ts ──────────────────────────────────
-// Replace the existing PaperPreview interface with this one.
-// Only has_pdf → has_full_text changed.
+export type ChatMode = 'standard' | 'study' | 'technical'
 
 export interface PaperPreview {
   paper_id:      string
@@ -40,7 +38,7 @@ export interface PaperPreview {
   abstract:      string
   authors:       string[]
   url:           string
-  has_full_text: boolean   // true if pdf_url exists OR pubmed paper has a pubmed_id
+  has_full_text: boolean
   published:     string
   journal:       string
   categories:    string[]
@@ -67,6 +65,7 @@ export interface Session {
   paper_id:       string
   topic:          string | null
   level:          string
+  mode:           ChatMode
   title:          string | null
   last_active_at: string | null
   created_at:     string | null
@@ -124,10 +123,7 @@ export interface SearchParams {
 export async function searchPapers(
   params: SearchParams
 ): Promise<{ papers: PaperPreview[]; message: string }> {
-  return request('/papers/search', {
-    method: 'POST',
-    body: JSON.stringify(params),
-  })
+  return request('/papers/search', { method: 'POST', body: JSON.stringify(params) })
 }
 
 export async function processPapers(
@@ -176,6 +172,18 @@ export async function deletePaper(
 
 export async function listSessions(): Promise<{ sessions: Session[] }> {
   return request('/chat/sessions')
+}
+
+export async function createSession(params: {
+  paper_id: string
+  topic?:   string
+  level?:   string
+  mode:     ChatMode
+}): Promise<{ session: SessionDetail }> {
+  return request('/chat/sessions', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  })
 }
 
 export async function getSession(

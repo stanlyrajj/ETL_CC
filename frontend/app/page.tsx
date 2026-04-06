@@ -11,73 +11,52 @@ import {
   type Message, type SocialItem, type ModelOption, type ChatMode,
 } from './lib/api'
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
+// ── Types ─────────────────────────────────────────────────────────────────────
 type View     = 'search' | 'selection' | 'processing' | 'chat'
 type Level    = 'beginner' | 'intermediate' | 'advanced'
 type Platform = 'twitter' | 'linkedin' | 'carousel'
 
-interface PaperStatus extends Paper {
-  sseStage?:   string
-  sseMessage?: string
-}
+interface PaperStatus extends Paper { sseStage?: string; sseMessage?: string }
 
 const BACKEND = 'http://localhost:8000'
 
 // ── Chat mode config ──────────────────────────────────────────────────────────
-
 const CHAT_MODES: { id: ChatMode; label: string; description: string; color: string }[] = [
-  {
-    id:          'standard',
-    label:       'Chat',
-    description: 'Ask anything about this paper',
-    color:       'var(--accent)',
-  },
-  {
-    id:          'study',
-    label:       'Study',
-    description: 'Flashcards, questions & examples',
-    color:       '#60a5fa',
-  },
-  {
-    id:          'technical',
-    label:       'Technical',
-    description: 'System design & implementation',
-    color:       '#c084fc',
-  },
+  { id: 'standard',  label: 'Chat',      description: 'Ask anything about this paper', color: 'var(--accent)' },
+  { id: 'study',     label: 'Study',     description: 'Structured lesson + flashcards', color: 'var(--study-color)' },
+  { id: 'technical', label: 'Technical', description: 'System design & implementation', color: 'var(--technical-color)' },
 ]
 
 // ── arXiv categories ──────────────────────────────────────────────────────────
 const ARXIV_CATEGORIES = [
-  { label: 'All Categories',                    value: '' },
-  { label: '── Computer Science ──',            value: '', disabled: true },
-  { label: 'Artificial Intelligence',           value: 'cs.AI' },
-  { label: 'Machine Learning',                  value: 'cs.LG' },
-  { label: 'Computation and Language (NLP)',    value: 'cs.CL' },
-  { label: 'Computer Vision',                   value: 'cs.CV' },
-  { label: 'Robotics',                          value: 'cs.RO' },
-  { label: 'Human-Computer Interaction',        value: 'cs.HC' },
-  { label: 'Information Retrieval',             value: 'cs.IR' },
+  { label: 'All Categories', value: '' },
+  { label: '── Computer Science ──', value: '', disabled: true },
+  { label: 'Artificial Intelligence', value: 'cs.AI' },
+  { label: 'Machine Learning', value: 'cs.LG' },
+  { label: 'Computation and Language (NLP)', value: 'cs.CL' },
+  { label: 'Computer Vision', value: 'cs.CV' },
+  { label: 'Robotics', value: 'cs.RO' },
+  { label: 'Human-Computer Interaction', value: 'cs.HC' },
+  { label: 'Information Retrieval', value: 'cs.IR' },
   { label: 'Neural and Evolutionary Computing', value: 'cs.NE' },
-  { label: '── Biology & Medicine ──',          value: '', disabled: true },
-  { label: 'Biomolecules',                      value: 'q-bio.BM' },
-  { label: 'Genomics',                          value: 'q-bio.GN' },
-  { label: 'Neurons and Cognition',             value: 'q-bio.NC' },
-  { label: 'Quantitative Methods',              value: 'q-bio.QM' },
-  { label: '── Statistics & Mathematics ──',    value: '', disabled: true },
-  { label: 'Machine Learning (Statistics)',     value: 'stat.ML' },
-  { label: 'Statistics Theory',                value: 'stat.TH' },
-  { label: 'Mathematics General',              value: 'math.GM' },
-  { label: '── Physics & Engineering ──',       value: '', disabled: true },
-  { label: 'Physics General',                  value: 'physics.gen-ph' },
-  { label: 'Electrical Engineering',           value: 'eess.SP' },
-  { label: 'Systems and Control',              value: 'eess.SY' },
-  { label: '── Economics ──',                   value: '', disabled: true },
-  { label: 'Economics',                        value: 'econ.GN' },
+  { label: '── Biology & Medicine ──', value: '', disabled: true },
+  { label: 'Biomolecules', value: 'q-bio.BM' },
+  { label: 'Genomics', value: 'q-bio.GN' },
+  { label: 'Neurons and Cognition', value: 'q-bio.NC' },
+  { label: 'Quantitative Methods', value: 'q-bio.QM' },
+  { label: '── Statistics & Mathematics ──', value: '', disabled: true },
+  { label: 'Machine Learning (Statistics)', value: 'stat.ML' },
+  { label: 'Statistics Theory', value: 'stat.TH' },
+  { label: 'Mathematics General', value: 'math.GM' },
+  { label: '── Physics & Engineering ──', value: '', disabled: true },
+  { label: 'Physics General', value: 'physics.gen-ph' },
+  { label: 'Electrical Engineering', value: 'eess.SP' },
+  { label: 'Systems and Control', value: 'eess.SY' },
+  { label: '── Economics ──', value: '', disabled: true },
+  { label: 'Economics', value: 'econ.GN' },
 ]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
 function stageLabel(stage: string): string {
   const map: Record<string, string> = {
     pending: 'Pending', downloading: 'Downloading…', downloaded: 'Downloaded',
@@ -86,51 +65,36 @@ function stageLabel(stage: string): string {
   }
   return map[stage] ?? stage
 }
-
 function stageClass(stage: string): string {
   if (stage === 'processed')      return 'badge-done'
   if (stage.startsWith('failed')) return 'badge-error'
   if (stage === 'pending')        return 'badge-pending'
   return 'badge-active'
 }
-
-function isTerminal(stage: string) {
-  return stage === 'processed' || stage.startsWith('failed')
-}
-
+function isTerminal(stage: string) { return stage === 'processed' || stage.startsWith('failed') }
 function truncateAbstract(text: string, sentences = 2): string {
   if (!text) return ''
   const parts = text.match(/[^.!?]+[.!?]+/g) || []
   return parts.slice(0, sentences).join(' ').trim() || text.slice(0, 200)
 }
-
 function relativeTime(iso: string | null): string {
   if (!iso) return ''
-  const diff  = Date.now() - new Date(iso).getTime()
-  const mins  = Math.floor(diff / 60000)
-  const hours = Math.floor(diff / 3600000)
-  const days  = Math.floor(diff / 86400000)
-  if (mins  <  1) return 'just now'
-  if (mins  < 60) return `${mins}m ago`
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(diff / 60000), hours = Math.floor(diff / 3600000), days = Math.floor(diff / 86400000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
   if (hours < 24) return `${hours}h ago`
-  if (days  === 1) return 'Yesterday'
-  if (days  <  7) return `${days}d ago`
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return `${days}d ago`
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
-
 type SessionGroup = { label: string; sessions: Session[] }
-
 function groupSessions(sessions: Session[]): SessionGroup[] {
   const now = Date.now()
-  const today: Session[] = [], yesterday: Session[] = [],
-        week: Session[]  = [], older: Session[]     = []
+  const today: Session[] = [], yesterday: Session[] = [], week: Session[] = [], older: Session[] = []
   for (const s of sessions) {
-    const diff = now - new Date(s.last_active_at ?? s.created_at ?? 0).getTime()
-    const days = diff / 86400000
-    if (days < 1)      today.push(s)
-    else if (days < 2) yesterday.push(s)
-    else if (days < 7) week.push(s)
-    else               older.push(s)
+    const days = (now - new Date(s.last_active_at ?? s.created_at ?? 0).getTime()) / 86400000
+    if (days < 1) today.push(s); else if (days < 2) yesterday.push(s); else if (days < 7) week.push(s); else older.push(s)
   }
   const groups: SessionGroup[] = []
   if (today.length)     groups.push({ label: 'Today',     sessions: today })
@@ -139,50 +103,536 @@ function groupSessions(sessions: Session[]): SessionGroup[] {
   if (older.length)     groups.push({ label: 'Older',     sessions: older })
   return groups
 }
-
 const SOURCE_COLORS: Record<string, { bg: string; color: string; label: string }> = {
   arxiv:  { bg: 'rgba(180,120,255,0.15)', color: '#c084fc', label: 'arXiv' },
   pubmed: { bg: 'rgba(59,130,246,0.15)',  color: '#60a5fa', label: 'PubMed' },
   local:  { bg: 'rgba(16,185,129,0.15)',  color: 'var(--accent)', label: 'Local' },
 }
 
-const MODE_COLORS: Record<ChatMode, string> = {
-  standard:  'var(--accent)',
-  study:     '#60a5fa',
-  technical: '#c084fc',
+// ── Spinner & Icons ───────────────────────────────────────────────────────────
+function Spinner({ size = '' }: { size?: string }) { return <span className={`spinner ${size}`} /> }
+function IconSearch() { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> }
+function IconUpload() { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> }
+function IconSend() { return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> }
+function IconShare() { return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg> }
+function IconDownload() { return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> }
+function IconChevron({ open }: { open: boolean }) { return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'transform 0.2s', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}><polyline points="6 9 12 15 18 9"/></svg> }
+function IconSparkle() { return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/></svg> }
+function IconTrash() { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg> }
+
+// ── MermaidBlock — renders mermaid diagrams client-side ───────────────────────
+function MermaidBlock({ code }: { code: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    if (!ref.current) return
+    const el = ref.current
+    import('mermaid').then(m => {
+      const mermaid = m.default
+      mermaid.initialize({ startOnLoad: false, theme: 'dark', themeVariables: { background: 'transparent', primaryColor: '#1e2333', primaryTextColor: '#e8eaf0', lineColor: '#3a4258', edgeLabelBackground: '#1e2333' } })
+      const id = `mermaid-${Math.random().toString(36).slice(2)}`
+      mermaid.render(id, code).then(({ svg }) => {
+        el.innerHTML = svg
+      }).catch(() => setError(true))
+    }).catch(() => setError(true))
+  }, [code])
+
+  if (error) {
+    return (
+      <pre style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px', fontSize: '0.8125rem', color: 'var(--text-2)', overflowX: 'auto' }}>
+        {code}
+      </pre>
+    )
+  }
+  return <div ref={ref} className="mermaid-block" />
 }
 
-// ── Spinner ───────────────────────────────────────────────────────────────────
-
-function Spinner({ size = '' }: { size?: string }) {
-  return <span className={`spinner ${size}`} />
+// ── MarkdownWithMermaid — renders markdown and detects mermaid blocks ─────────
+function MarkdownWithMermaid({ content, className = 'md-body' }: { content: string; className?: string }) {
+  // Split content into mermaid blocks and regular markdown
+  const parts = content.split(/(```mermaid[\s\S]*?```)/g)
+  return (
+    <div className={className}>
+      {parts.map((part, i) => {
+        const mermaidMatch = part.match(/^```mermaid\n([\s\S]*?)\n?```$/)
+        if (mermaidMatch) {
+          return <MermaidBlock key={i} code={mermaidMatch[1].trim()} />
+        }
+        return part.trim() ? <ReactMarkdown key={i}>{part}</ReactMarkdown> : null
+      })}
+    </div>
+  )
 }
 
-// ── Icons ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Study Panel
+// ─────────────────────────────────────────────────────────────────────────────
 
-function IconSearch() {
-  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+interface StudySection { index: number; title: string; description: string }
+interface StudyOutline { summary: string; sections: StudySection[] }
+interface Flashcard    { front: string; back: string }
+
+type StudyPhase = 'idle' | 'loading_outline' | 'outline' | 'teaching' | 'flashcards' | 'error'
+
+function StudyPanel({ paperId }: { paperId: string }) {
+  const [phase, setPhase]               = useState<StudyPhase>('idle')
+  const [outline, setOutline]           = useState<StudyOutline | null>(null)
+  const [sections, setSections]         = useState<{ title: string; content: string }[]>([])
+  const [currentSection, setCurrentSection] = useState(0)
+  const [sectionLoading, setSectionLoading] = useState(false)
+  const [flashcards, setFlashcards]     = useState<Flashcard[]>([])
+  const [flashcardsLoading, setFlashcardsLoading] = useState(false)
+  const [cardIndex, setCardIndex]       = useState(0)
+  const [flipped, setFlipped]           = useState(false)
+  const [error, setError]               = useState('')
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [sections, phase])
+
+  async function fetchOutline() {
+    setPhase('loading_outline'); setError('')
+    try {
+      const res = await fetch(`/api/study/${paperId}/outline`, { method: 'POST' })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to generate outline') }
+      const data = await res.json()
+      setOutline(data.outline)
+      setPhase('outline')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to generate outline.')
+      setPhase('error')
+    }
+  }
+
+  async function startTeaching() {
+    if (!outline) return
+    setPhase('teaching'); setSections([]); setCurrentSection(0)
+    await loadSection(0)
+  }
+
+  async function loadSection(index: number) {
+    if (!outline) return
+    const section = outline.sections[index]
+    setSectionLoading(true)
+    try {
+      const res = await fetch(`/api/study/${paperId}/section`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ section_title: section.title, section_description: section.description }),
+      })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to load section') }
+      const data = await res.json()
+      setSections(prev => [...prev, { title: section.title, content: data.content }])
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load section.')
+    } finally {
+      setSectionLoading(false)
+    }
+  }
+
+  async function nextSection() {
+    if (!outline) return
+    const next = currentSection + 1
+    if (next < outline.sections.length) {
+      setCurrentSection(next)
+      await loadSection(next)
+    } else {
+      await fetchFlashcards()
+    }
+  }
+
+  async function fetchFlashcards() {
+    setFlashcardsLoading(true)
+    try {
+      const res = await fetch(`/api/study/${paperId}/flashcards`, { method: 'POST' })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to generate flashcards') }
+      const data = await res.json()
+      setFlashcards(data.cards ?? [])
+      setCardIndex(0); setFlipped(false)
+      setPhase('flashcards')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to generate flashcards.')
+    } finally {
+      setFlashcardsLoading(false)
+    }
+  }
+
+  function prevCard() { setCardIndex(i => Math.max(0, i - 1)); setFlipped(false) }
+  function nextCard() { setCardIndex(i => Math.min(flashcards.length - 1, i + 1)); setFlipped(false) }
+
+  const totalSections = outline?.sections.length ?? 0
+  const progress = totalSections > 0 ? ((sections.length) / totalSections) * 100 : 0
+
+  // ── Idle ──
+  if (phase === 'idle') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
+        <div style={{ textAlign: 'center', marginBottom: '8px' }}>
+          <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--study-color)', marginBottom: '8px' }}>Study Mode</p>
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-2)', maxWidth: '360px', lineHeight: 1.6 }}>
+            The AI will analyze this paper and create a personalized learning plan for you.
+            Review the plan, then learn step by step.
+          </p>
+        </div>
+        <button className="btn btn-primary" onClick={fetchOutline}
+          style={{ background: 'var(--study-color)', minWidth: '200px' }}>
+          Generate Learning Plan
+        </button>
+      </div>
+    )
+  }
+
+  // ── Loading outline ──
+  if (phase === 'loading_outline') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '16px' }}>
+        <Spinner size="spinner-lg" />
+        <p style={{ color: 'var(--text-2)', fontSize: '0.9rem' }}>Analyzing paper and creating your learning plan…</p>
+      </div>
+    )
+  }
+
+  // ── Error ──
+  if (phase === 'error') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
+        <div className="notice notice-error" style={{ maxWidth: '400px' }}>{error}</div>
+        <button className="btn btn-ghost" onClick={() => { setPhase('idle'); setError('') }}>Try again</button>
+      </div>
+    )
+  }
+
+  // ── Outline approval ──
+  if (phase === 'outline' && outline) {
+    return (
+      <div style={{ padding: '24px', maxWidth: '680px', margin: '0 auto' }}>
+        <div className="study-outline-card" style={{ marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--study-color)', display: 'inline-block' }} />
+            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--study-color)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Your Learning Plan</span>
+          </div>
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-2)', lineHeight: 1.6, marginBottom: '20px' }}>{outline.summary}</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {outline.sections.map((s, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '12px', background: 'var(--bg-2)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+                <div className="study-section-number" style={{ marginTop: '1px' }}>{i + 1}</div>
+                <div>
+                  <p style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text)', marginBottom: '3px' }}>{s.title}</p>
+                  <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', lineHeight: 1.4 }}>{s.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button className="btn btn-primary btn-lg" onClick={startTeaching}
+            style={{ background: 'var(--study-color)', flex: 1 }}>
+            Begin Learning →
+          </button>
+          <button className="btn btn-ghost" onClick={() => setPhase('idle')}>Regenerate</button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Teaching phase ──
+  if (phase === 'teaching') {
+    const allLoaded    = sections.length === totalSections
+    const isLastSection = currentSection === totalSections - 1
+
+    return (
+      <div style={{ padding: '24px', maxWidth: '720px', margin: '0 auto' }}>
+        {/* Progress */}
+        <div style={{ marginBottom: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <span style={{ fontSize: '0.8125rem', color: 'var(--study-color)', fontWeight: 500 }}>
+              {sections.length} of {totalSections} sections
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+              {Math.round(progress)}%
+            </span>
+          </div>
+          <div className="study-progress-bar">
+            <div className="study-progress-fill" style={{ width: `${progress}%` }} />
+          </div>
+        </div>
+
+        {/* Rendered sections */}
+        {sections.map((s, i) => (
+          <div key={i} className="study-section-block">
+            <div className="study-section-header">
+              <div className="study-section-number">{i + 1}</div>
+              <h3 style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--text)' }}>{s.title}</h3>
+            </div>
+            <MarkdownWithMermaid content={s.content} />
+          </div>
+        ))}
+
+        {/* Loading next section */}
+        {sectionLoading && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '16px', color: 'var(--text-3)', fontSize: '0.875rem' }}>
+            <Spinner size="spinner-sm" />
+            <span>Loading next section…</span>
+          </div>
+        )}
+
+        {error && <div className="notice notice-error" style={{ marginBottom: '12px' }}>{error}</div>}
+
+        {/* Next button — only show when the current section has loaded */}
+        {!sectionLoading && sections.length > currentSection && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+            {flashcardsLoading
+              ? <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-3)', fontSize: '0.875rem' }}>
+                  <Spinner size="spinner-sm" /><span>Generating flashcards…</span>
+                </div>
+              : (
+                <button className="btn btn-primary" onClick={nextSection}
+                  style={{ background: 'var(--study-color)' }}>
+                  {isLastSection ? 'Finish & Get Flashcards →' : 'Next Section →'}
+                </button>
+              )
+            }
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+    )
+  }
+
+  // ── Flashcards phase ──
+  if (phase === 'flashcards' && flashcards.length > 0) {
+    const card = flashcards[cardIndex]
+    return (
+      <div style={{ padding: '24px', maxWidth: '600px', margin: '0 auto' }}>
+        <div style={{ marginBottom: '20px', textAlign: 'center' }}>
+          <p style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--study-color)', marginBottom: '4px' }}>Flashcards</p>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)' }}>
+            Card {cardIndex + 1} of {flashcards.length} · Click card to reveal answer
+          </p>
+        </div>
+
+        {/* Progress dots */}
+        <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginBottom: '20px' }}>
+          {flashcards.map((_, i) => (
+            <button key={i} onClick={() => { setCardIndex(i); setFlipped(false) }}
+              style={{ width: '8px', height: '8px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: i === cardIndex ? 'var(--study-color)' : 'var(--border)', transition: 'background 0.15s', padding: 0 }} />
+          ))}
+        </div>
+
+        {/* Flip card */}
+        <div className={`flashcard-scene${flipped ? ' flipped' : ''}`} onClick={() => setFlipped(f => !f)}>
+          <div className="flashcard-inner">
+            <div className="flashcard-front">
+              <div className="flashcard-label">Question</div>
+              <div className="flashcard-text">{card.front}</div>
+              <div className="flashcard-hint">Click to reveal answer</div>
+            </div>
+            <div className="flashcard-back">
+              <div className="flashcard-label">Answer</div>
+              <div className="flashcard-text">{card.back}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Navigation */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px' }}>
+          <button className="btn btn-ghost btn-sm" onClick={prevCard} disabled={cardIndex === 0}>← Previous</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => { setPhase('idle'); setSections([]); setOutline(null) }}>
+            Restart
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={nextCard} disabled={cardIndex === flashcards.length - 1}>Next →</button>
+        </div>
+      </div>
+    )
+  }
+
+  return null
 }
-function IconUpload() {
-  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-}
-function IconSend() {
-  return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-}
-function IconShare() {
-  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
-}
-function IconDownload() {
-  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-}
-function IconChevron({ open }: { open: boolean }) {
-  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'transform 0.2s', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}><polyline points="6 9 12 15 18 9"/></svg>
-}
-function IconSparkle() {
-  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/></svg>
-}
-function IconTrash() {
-  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Technical Panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TECHNICAL_SECTION_DEFS = [
+  { key: 'overview',       label: 'Overview' },
+  { key: 'concepts',       label: 'Core Concepts' },
+  { key: 'architecture',   label: 'System Architecture' },
+  { key: 'implementation', label: 'Implementation Details' },
+  { key: 'scalability',    label: 'Scalability & Trade-offs' },
+]
+
+interface TechnicalSection { key: string; label: string; content: string }
+type TechnicalPhase = 'idle' | 'analyzing' | 'done' | 'error'
+
+function TechnicalPanel({ paperId }: { paperId: string }) {
+  const [phase, setPhase]           = useState<TechnicalPhase>('idle')
+  const [sections, setSections]     = useState<TechnicalSection[]>([])
+  const [activeKey, setActiveKey]   = useState('overview')
+  const [loadingKey, setLoadingKey] = useState<string | null>(null)
+  const [error, setError]           = useState('')
+  const esRef = useRef<EventSource | null>(null)
+
+  useEffect(() => () => { esRef.current?.close() }, [])
+
+  async function startAnalysis() {
+    setPhase('analyzing'); setSections([]); setError(''); setActiveKey('overview')
+
+    try {
+      const res = await fetch(`/api/technical/${paperId}/analyze`, { method: 'POST' })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to start analysis') }
+      const data = await res.json()
+      const qk   = data.queue_key
+
+      setLoadingKey('overview')
+
+      await new Promise<void>((resolve, reject) => {
+        const es = new EventSource(`${BACKEND}/api/technical/${qk}/progress`)
+        esRef.current = es
+
+        es.addEventListener('section', (e: MessageEvent) => {
+          try {
+            const d = JSON.parse(e.data)
+            setSections(prev => [...prev, { key: d.section_key, label: d.section_label, content: d.content }])
+            setActiveKey(d.section_key)
+            // Set next loading key
+            const nextIdx = d.section_index + 1
+            if (nextIdx < TECHNICAL_SECTION_DEFS.length) {
+              setLoadingKey(TECHNICAL_SECTION_DEFS[nextIdx].key)
+            } else {
+              setLoadingKey(null)
+            }
+          } catch { /* ignore */ }
+        })
+
+        es.addEventListener('section_failed', (e: MessageEvent) => {
+          try {
+            const d = JSON.parse(e.data)
+            // Insert placeholder so user knows something failed
+            setSections(prev => [...prev, {
+              key: d.section_key, label: d.section_label,
+              content: `*This section could not be generated: ${d.error}*`
+            }])
+          } catch { /* ignore */ }
+        })
+
+        es.addEventListener('done', () => { resolve(); es.close() })
+        es.onerror = () => { reject(new Error('SSE connection lost')); es.close() }
+      })
+
+      setPhase('done'); setLoadingKey(null)
+      // Switch to first section after done
+      if (sections.length > 0) setActiveKey(sections[0].key)
+
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Analysis failed.')
+      setPhase('error'); setLoadingKey(null)
+    }
+  }
+
+  const activeSection = sections.find(s => s.key === activeKey) ?? sections[0] ?? null
+
+  // ── Idle ──
+  if (phase === 'idle') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
+        <div style={{ textAlign: 'center', marginBottom: '8px' }}>
+          <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--technical-color)', marginBottom: '8px' }}>Technical Mode</p>
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-2)', maxWidth: '380px', lineHeight: 1.6 }}>
+            Get a comprehensive technical breakdown of this paper — architecture diagrams,
+            implementation details, pseudocode, and engineering trade-offs.
+          </p>
+          <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center' }}>
+            {TECHNICAL_SECTION_DEFS.map((s, i) => (
+              <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8125rem', color: 'var(--text-3)' }}>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--technical-color)', fontSize: '0.75rem' }}>{i + 1}.</span>
+                {s.label}
+              </div>
+            ))}
+          </div>
+        </div>
+        <button className="btn btn-primary btn-lg" onClick={startAnalysis}
+          style={{ background: 'var(--technical-color)', minWidth: '220px' }}>
+          Analyze Paper
+        </button>
+      </div>
+    )
+  }
+
+  // ── Error ──
+  if (phase === 'error') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
+        <div className="notice notice-error" style={{ maxWidth: '400px' }}>{error}</div>
+        <button className="btn btn-ghost" onClick={() => { setPhase('idle'); setError('') }}>Try again</button>
+      </div>
+    )
+  }
+
+  // ── Analyzing / Done ──
+  return (
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+
+      {/* Section nav */}
+      <nav className="technical-nav">
+        <p style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0 16px 8px' }}>Sections</p>
+        {TECHNICAL_SECTION_DEFS.map(def => {
+          const done   = sections.some(s => s.key === def.key)
+          const loading = loadingKey === def.key
+          return (
+            <button key={def.key}
+              className={`technical-nav-item ${activeKey === def.key ? 'active' : ''} ${done ? 'done' : ''} ${loading ? 'loading' : ''}`}
+              onClick={() => done && setActiveKey(def.key)}
+              disabled={!done}
+              style={{ cursor: done ? 'pointer' : 'default' }}>
+              {loading && <Spinner size="spinner-sm" />}
+              {done && !loading && <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--technical-color)', flexShrink: 0 }} />}
+              {!done && !loading && <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--border)', flexShrink: 0 }} />}
+              {def.label}
+            </button>
+          )
+        })}
+        {phase === 'analyzing' && (
+          <div style={{ padding: '12px 16px', marginTop: 'auto' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Spinner size="spinner-sm" />
+              Analyzing…
+            </div>
+          </div>
+        )}
+      </nav>
+
+      {/* Content area */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
+        {sections.length === 0 && phase === 'analyzing' && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '12px', color: 'var(--text-3)' }}>
+            <Spinner />
+            <span>Generating overview…</span>
+          </div>
+        )}
+
+        {/* Show active section */}
+        {activeSection && (
+          <div className="technical-section-block fade-in">
+            <div className="technical-section-title">
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--technical-color)', flexShrink: 0 }} />
+              {activeSection.label}
+            </div>
+            <MarkdownWithMermaid content={activeSection.content} />
+          </div>
+        )}
+
+        {/* Loading indicator for current section */}
+        {loadingKey && phase === 'analyzing' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '16px 0', color: 'var(--text-3)', fontSize: '0.875rem' }}>
+            <Spinner size="spinner-sm" />
+            <span>Generating {TECHNICAL_SECTION_DEFS.find(s => s.key === loadingKey)?.label ?? 'next section'}…</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,9 +670,7 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
 
   useEffect(() => {
     getModels().then(res => {
-      if (res.provider === 'openrouter') {
-        setIsOpenRouter(true); setModels(res.models); setActiveModel(res.active_model)
-      }
+      if (res.provider === 'openrouter') { setIsOpenRouter(true); setModels(res.models); setActiveModel(res.active_model) }
     }).catch(() => {})
   }, [])
 
@@ -234,8 +682,7 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
     finally { setModelSwitching(false) }
   }
 
-  const topicError = topic.trim().length === 0 && topic.length > 0
-    ? 'Topic cannot be empty.'
+  const topicError = topic.trim().length === 0 && topic.length > 0 ? 'Topic cannot be empty.'
     : topic.length > 200 ? 'Topic must be 200 characters or fewer.' : ''
 
   async function handleSearch(e: React.FormEvent) {
@@ -334,7 +781,6 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
               <input className={`input ${topicError ? 'error' : ''}`} value={topic} onChange={e => { setTopic(e.target.value); setError('') }} placeholder={mode === 'search' ? 'e.g. large language models, RAG' : 'e.g. transformer architecture'} maxLength={200} />
               {topicError && <p style={{ color: 'var(--error)', fontSize: '0.8125rem', marginTop: '4px' }}>{topicError}</p>}
             </div>
-
             {mode === 'search' && (
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
@@ -358,28 +804,21 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
                     style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--bg-3)', border: 'none', cursor: 'pointer', color: 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{ fontWeight: 500 }}>Refine results</span>
-                      {activeFilters.length > 0 && !showRefine && (
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>· {activeFilters.join(' · ')}</span>
-                      )}
+                      {activeFilters.length > 0 && !showRefine && <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>· {activeFilters.join(' · ')}</span>}
                     </div>
                     <IconChevron open={showRefine} />
                   </button>
                   {showRefine && (
                     <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <div>
-                        <label className="label">Sort by</label>
+                      <div><label className="label">Sort by</label>
                         <select className="select" value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}>
-                          <option value="date">Most recent</option>
-                          <option value="relevance">Most relevant</option>
+                          <option value="date">Most recent</option><option value="relevance">Most relevant</option>
                         </select>
                       </div>
                       {source !== 'pubmed' && (
-                        <div>
-                          <label className="label">arXiv category</label>
+                        <div><label className="label">arXiv category</label>
                           <select className="select" value={category} onChange={e => setCategory(e.target.value)}>
-                            {ARXIV_CATEGORIES.map((c, i) => (
-                              <option key={i} value={c.value} disabled={c.disabled as boolean | undefined}>{c.label}</option>
-                            ))}
+                            {ARXIV_CATEGORIES.map((c, i) => <option key={i} value={c.value} disabled={c.disabled as boolean | undefined}>{c.label}</option>)}
                           </select>
                         </div>
                       )}
@@ -387,8 +826,7 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
                         <div><label className="label">From date</label><input className="input" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
                         <div><label className="label">To date</label><input className="input" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
                       </div>
-                      <div>
-                        <label className="label">Must include keyword</label>
+                      <div><label className="label">Must include keyword</label>
                         <input className="input" value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="e.g. interpretability, fine-tuning" />
                       </div>
                       {activeFilters.length > 0 && (
@@ -402,7 +840,6 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
                 </div>
               </>
             )}
-
             {mode === 'upload' && (
               <div style={{ marginBottom: '20px' }}>
                 <label className="label">PDF file</label>
@@ -415,7 +852,6 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
                 <input ref={fileRef} type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleFile} />
               </div>
             )}
-
             {error && <div className="notice notice-error" style={{ marginBottom: '16px' }}>{error}</div>}
             <button type="submit" className="btn btn-primary btn-full btn-lg" disabled={loading}>
               {loading ? <><Spinner />{mode === 'search' ? 'Searching…' : 'Uploading…'}</> : <>{mode === 'search' ? <IconSearch /> : <IconUpload />}{mode === 'search' ? 'Search papers' : 'Upload & process'}</>}
@@ -434,7 +870,7 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
 function PaperSelectionCard({ paper, selected, onToggle }: {
   paper: PaperPreview; selected: boolean; onToggle: () => void
 }) {
-  const [summary, setSummary]               = useState<string | null>(null)
+  const [summary, setSummary]           = useState<string | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [showFullAbstract, setShowFullAbstract] = useState(false)
   const srcStyle = SOURCE_COLORS[paper.source] ?? SOURCE_COLORS.local
@@ -443,17 +879,11 @@ function PaperSelectionCard({ paper, selected, onToggle }: {
     if (!paper.abstract) return
     setSummaryLoading(true)
     fetch('/api/generate/followup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        context: `Summarize this research paper abstract in 2-3 plain sentences for a non-specialist:\n\n${paper.abstract}`,
-      }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context: `Summarize this research paper abstract in 2-3 plain sentences for a non-specialist:\n\n${paper.abstract}` }),
     })
       .then(r => r.ok ? r.json() : Promise.reject())
-      .then(data => {
-        const qs: string[] = data.questions ?? []
-        setSummary(qs.length > 0 ? qs.join(' ') : truncateAbstract(paper.abstract, 2))
-      })
+      .then(data => { const qs: string[] = data.questions ?? []; setSummary(qs.length > 0 ? qs.join(' ') : truncateAbstract(paper.abstract, 2)) })
       .catch(() => setSummary(truncateAbstract(paper.abstract, 2)))
       .finally(() => setSummaryLoading(false))
   }, [paper.paper_id])
@@ -470,41 +900,25 @@ function PaperSelectionCard({ paper, selected, onToggle }: {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.7rem', fontWeight: 600, padding: '2px 8px', borderRadius: '12px', background: srcStyle.bg, color: srcStyle.color, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>{srcStyle.label}</span>
-            {!paper.has_full_text && (
-              <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '12px', background: 'var(--warn-bg)', color: 'var(--warn)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>Abstract only</span>
-            )}
+            {!paper.has_full_text && <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '12px', background: 'var(--warn-bg)', color: 'var(--warn)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>Abstract only</span>}
             {paper.published && <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{paper.published.slice(0, 10)}</span>}
           </div>
           <p style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--text)', lineHeight: 1.4, marginBottom: '6px' }}>{paper.title || paper.paper_id}</p>
-          {paper.authors.length > 0 && (
-            <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', marginBottom: '8px' }}>
-              {paper.authors.slice(0, 3).join(', ')}{paper.authors.length > 3 ? ' et al.' : ''}
-            </p>
-          )}
+          {paper.authors.length > 0 && <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', marginBottom: '8px' }}>{paper.authors.slice(0, 3).join(', ')}{paper.authors.length > 3 ? ' et al.' : ''}</p>}
           <div style={{ fontSize: '0.875rem', color: 'var(--text-2)', lineHeight: 1.6, marginBottom: '8px' }}>
             {summaryLoading
               ? <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Spinner size="spinner-sm" /><span style={{ color: 'var(--text-3)', fontSize: '0.8125rem' }}>Summarising…</span></div>
-              : <span>{summary ?? truncateAbstract(paper.abstract, 2)}</span>
-            }
+              : <span>{summary ?? truncateAbstract(paper.abstract, 2)}</span>}
           </div>
           {paper.abstract && (
             <div>
-              <button type="button" onClick={() => setShowFullAbstract(o => !o)}
-                style={{ fontSize: '0.8125rem', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+              <button type="button" onClick={() => setShowFullAbstract(o => !o)} style={{ fontSize: '0.8125rem', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
                 {showFullAbstract ? 'Hide abstract' : 'Show original abstract'}
               </button>
-              {showFullAbstract && (
-                <p style={{ fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.6, marginTop: '8px', padding: '10px 12px', background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
-                  {paper.abstract}
-                </p>
-              )}
+              {showFullAbstract && <p style={{ fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.6, marginTop: '8px', padding: '10px 12px', background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>{paper.abstract}</p>}
             </div>
           )}
-          {(paper.journal || paper.doi) && (
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: '6px', fontFamily: 'var(--font-mono)' }}>
-              {paper.journal}{paper.journal && paper.doi ? ' · ' : ''}{paper.doi ? `DOI: ${paper.doi}` : ''}
-            </p>
-          )}
+          {(paper.journal || paper.doi) && <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: '6px', fontFamily: 'var(--font-mono)' }}>{paper.journal}{paper.journal && paper.doi ? ' · ' : ''}{paper.doi ? `DOI: ${paper.doi}` : ''}</p>}
         </div>
       </div>
     </div>
@@ -519,11 +933,7 @@ function SelectionView({ papers, onSelect, onBack }: {
   const [error, setError]       = useState('')
 
   function toggle(paperId: string) {
-    setSelected(prev => {
-      const next = new Set(prev)
-      if (next.has(paperId)) next.delete(paperId); else next.add(paperId)
-      return next
-    })
+    setSelected(prev => { const next = new Set(prev); if (next.has(paperId)) next.delete(paperId); else next.add(paperId); return next })
   }
   function selectAll()   { setSelected(new Set(papers.map(p => p.paper_id))) }
   function deselectAll() { setSelected(new Set()) }
@@ -531,13 +941,8 @@ function SelectionView({ papers, onSelect, onBack }: {
   async function handleProcess() {
     if (selected.size === 0) return
     setError(''); setLoading(true)
-    try {
-      await processPapers(Array.from(selected))
-      onSelect(papers.filter(p => selected.has(p.paper_id)))
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to start processing.')
-      setLoading(false)
-    }
+    try { await processPapers(Array.from(selected)); onSelect(papers.filter(p => selected.has(p.paper_id))) }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to start processing.'); setLoading(false) }
   }
 
   return (
@@ -551,9 +956,7 @@ function SelectionView({ papers, onSelect, onBack }: {
             </div>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <button className="btn btn-ghost btn-sm" onClick={onBack}>← New search</button>
-              <button className="btn btn-ghost btn-sm" onClick={selected.size === papers.length ? deselectAll : selectAll}>
-                {selected.size === papers.length ? 'Deselect all' : 'Select all'}
-              </button>
+              <button className="btn btn-ghost btn-sm" onClick={selected.size === papers.length ? deselectAll : selectAll}>{selected.size === papers.length ? 'Deselect all' : 'Select all'}</button>
               <button className="btn btn-primary" onClick={handleProcess} disabled={selected.size === 0 || loading} style={{ minWidth: '140px' }}>
                 {loading ? <><Spinner />Starting…</> : selected.size === 0 ? 'Select papers' : `Process ${selected.size} paper${selected.size !== 1 ? 's' : ''}`}
               </button>
@@ -564,12 +967,8 @@ function SelectionView({ papers, onSelect, onBack }: {
           </div>
         </div>
         {error && <div className="notice notice-error" style={{ marginBottom: '16px' }}>{error}</div>}
-        {papers.map(paper => (
-          <PaperSelectionCard key={paper.paper_id} paper={paper} selected={selected.has(paper.paper_id)} onToggle={() => toggle(paper.paper_id)} />
-        ))}
-        {papers.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-3)' }}>No papers found.</div>
-        )}
+        {papers.map(paper => <PaperSelectionCard key={paper.paper_id} paper={paper} selected={selected.has(paper.paper_id)} onToggle={() => toggle(paper.paper_id)} />)}
+        {papers.length === 0 && <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-3)' }}>No papers found.</div>}
       </div>
     </div>
   )
@@ -590,31 +989,21 @@ function PaperCard({ paper }: { paper: PaperStatus }) {
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-3)', background: 'var(--bg-3)', padding: '1px 6px', borderRadius: '4px', textTransform: 'uppercase' }}>{paper.source}</span>
             {isActive && <span className="pulse-dot" />}
           </div>
-          <p style={{ fontWeight: 500, fontSize: '0.9375rem', color: 'var(--text)', lineHeight: 1.4, marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-            {paper.title ?? paper.paper_id}
-          </p>
+          <p style={{ fontWeight: 500, fontSize: '0.9375rem', color: 'var(--text)', lineHeight: 1.4, marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{paper.title ?? paper.paper_id}</p>
           {paper.sseMessage && <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', marginTop: '2px' }}>{paper.sseMessage}</p>}
           {stage.startsWith('failed') && paper.error_message && <p style={{ fontSize: '0.8125rem', color: 'var(--error)', marginTop: '4px' }}>{paper.error_message}</p>}
         </div>
-        <span className={`badge ${stageClass(stage)}`} style={{ flexShrink: 0 }}>
-          {isActive && <Spinner size="spinner-sm" />}
-          {stageLabel(stage)}
-        </span>
+        <span className={`badge ${stageClass(stage)}`} style={{ flexShrink: 0 }}>{isActive && <Spinner size="spinner-sm" />}{stageLabel(stage)}</span>
       </div>
     </div>
   )
 }
 
-function ProcessingView({ papers, onDone }: {
-  papers: Paper[]; onDone: (processedPapers: Paper[]) => void
-}) {
-  const [statuses, setStatuses] = useState<Record<string, PaperStatus>>(
-    () => Object.fromEntries(papers.map(p => [p.paper_id, { ...p }]))
-  )
+function ProcessingView({ papers, onDone }: { papers: Paper[]; onDone: (processedPapers: Paper[]) => void }) {
+  const [statuses, setStatuses] = useState<Record<string, PaperStatus>>(() => Object.fromEntries(papers.map(p => [p.paper_id, { ...p }])))
   const esRefs  = useRef<Record<string, EventSource>>({})
   const doneRef = useRef(false)
-
-  const update = useCallback((paperId: string, patch: Partial<PaperStatus>) => {
+  const update  = useCallback((paperId: string, patch: Partial<PaperStatus>) => {
     setStatuses(prev => ({ ...prev, [paperId]: { ...prev[paperId], ...patch } }))
   }, [])
 
@@ -622,14 +1011,9 @@ function ProcessingView({ papers, onDone }: {
     papers.forEach(paper => {
       const es = new EventSource(`${BACKEND}/api/papers/${paper.paper_id}/progress`)
       esRefs.current[paper.paper_id] = es
-      es.addEventListener('progress', (e: MessageEvent) => {
-        try { const d = JSON.parse(e.data); update(paper.paper_id, { sseStage: d.stage, sseMessage: d.message ?? '' }) } catch { /* ignore */ }
-      })
+      es.addEventListener('progress', (e: MessageEvent) => { try { const d = JSON.parse(e.data); update(paper.paper_id, { sseStage: d.stage, sseMessage: d.message ?? '' }) } catch { /* ignore */ } })
       es.addEventListener('done', (e: MessageEvent) => {
-        try {
-          const d = JSON.parse(e.data)
-          update(paper.paper_id, { sseStage: d.success ? 'processed' : 'failed_processing', sseMessage: d.message ?? (d.success ? 'Ready' : d.error ?? 'Failed'), pipeline_stage: d.success ? 'processed' : 'failed_processing', chunk_count: d.chunk_count ?? paper.chunk_count, error_message: d.success ? null : (d.error ?? 'Processing failed') })
-        } catch { /* ignore */ }
+        try { const d = JSON.parse(e.data); update(paper.paper_id, { sseStage: d.success ? 'processed' : 'failed_processing', sseMessage: d.message ?? (d.success ? 'Ready' : d.error ?? 'Failed'), pipeline_stage: d.success ? 'processed' : 'failed_processing', chunk_count: d.chunk_count ?? paper.chunk_count, error_message: d.success ? null : (d.error ?? 'Processing failed') }) } catch { /* ignore */ }
         es.close(); delete esRefs.current[paper.paper_id]
       })
       es.onerror = () => { update(paper.paper_id, { sseStage: paper.pipeline_stage }); es.close(); delete esRefs.current[paper.paper_id] }
@@ -641,10 +1025,7 @@ function ProcessingView({ papers, onDone }: {
     if (doneRef.current) return
     const all = Object.values(statuses)
     if (all.length === 0) return
-    if (all.every(p => isTerminal(p.sseStage ?? p.pipeline_stage))) {
-      doneRef.current = true
-      setTimeout(() => onDone(Object.values(statuses)), 1200)
-    }
+    if (all.every(p => isTerminal(p.sseStage ?? p.pipeline_stage))) { doneRef.current = true; setTimeout(() => onDone(Object.values(statuses)), 1200) }
   }, [statuses, onDone])
 
   const list      = Object.values(statuses)
@@ -666,9 +1047,7 @@ function ProcessingView({ papers, onDone }: {
         {list.map(paper => <PaperCard key={paper.paper_id} paper={paper} />)}
         {allDone && (
           <div style={{ textAlign: 'center', marginTop: '24px' }} className="fade-in">
-            <p style={{ color: 'var(--text-2)', marginBottom: '12px', fontSize: '0.9375rem' }}>
-              {list.filter(p => (p.sseStage ?? p.pipeline_stage) === 'processed').length} paper(s) ready — opening chat…
-            </p>
+            <p style={{ color: 'var(--text-2)', marginBottom: '12px', fontSize: '0.9375rem' }}>{list.filter(p => (p.sseStage ?? p.pipeline_stage) === 'processed').length} paper(s) ready — opening chat…</p>
             <button className="btn btn-ghost" onClick={() => onDone(Object.values(statuses))}>Continue now</button>
           </div>
         )}
@@ -709,28 +1088,19 @@ function GenerationPanel({ paperId }: { paperId: string }) {
         es.addEventListener('completed', async () => {
           try { const hist = await generationHistory(paperId, platform); const latest = hist.items[0] ?? null; setResult(latest); if (latest) { const links = await getShareLinks(latest.id); setShareLinks(links) } } catch { /* ignore */ }
         })
-        es.addEventListener('done', (e: MessageEvent) => {
-          try { const d = JSON.parse(e.data); if (!d.success && d.error) reject(new Error(d.error)); else resolve() } catch { resolve() }
-          es.close()
-        })
-        es.addEventListener('failed', (e: MessageEvent) => {
-          try { reject(new Error(JSON.parse(e.data).error ?? 'Generation failed')) } catch { reject(new Error('Generation failed')) }
-          es.close()
-        })
+        es.addEventListener('done', (e: MessageEvent) => { try { const d = JSON.parse(e.data); if (!d.success && d.error) reject(new Error(d.error)); else resolve() } catch { resolve() } es.close() })
+        es.addEventListener('failed', (e: MessageEvent) => { try { reject(new Error(JSON.parse(e.data).error ?? 'Generation failed')) } catch { reject(new Error('Generation failed')) } es.close() })
         es.onerror = () => { reject(new Error('SSE connection lost')); es.close() }
       })
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Generation failed.')
-    } finally { setLoading(false) }
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Generation failed.') }
+    finally { setLoading(false) }
   }
 
   async function handleExport() {
     if (!result) return
     setExporting(true)
-    try {
-      const res = await exportCarousel(result.id)
-      setExportUrl(`/api/generate/${result.id}/download?filename=${encodeURIComponent(res.filename)}`)
-    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Export failed.') }
+    try { const res = await exportCarousel(result.id); setExportUrl(`/api/generate/${result.id}/download?filename=${encodeURIComponent(res.filename)}`) }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : 'Export failed.') }
     finally { setExporting(false) }
   }
 
@@ -741,54 +1111,22 @@ function GenerationPanel({ paperId }: { paperId: string }) {
         const tweets: string[] = JSON.parse(result.content)
         return (
           <div>
-            {tweets.map((t, i) => (
-              <div key={i} style={{ padding: '10px 12px', borderBottom: i < tweets.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '0.875rem', lineHeight: 1.6 }}>
-                <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', marginRight: '8px' }}>{i + 1}</span>{t}
-              </div>
-            ))}
-            {result.hashtags?.length > 0 && (
-              <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', background: 'var(--accent-glow)', padding: '2px 8px', borderRadius: '12px' }}>{h}</span>)}
-              </div>
-            )}
+            {tweets.map((t, i) => <div key={i} style={{ padding: '10px 12px', borderBottom: i < tweets.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '0.875rem', lineHeight: 1.6 }}><span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', marginRight: '8px' }}>{i + 1}</span>{t}</div>)}
+            {result.hashtags?.length > 0 && <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>{result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', background: 'var(--accent-glow)', padding: '2px 8px', borderRadius: '12px' }}>{h}</span>)}</div>}
           </div>
         )
       }
-      if (platform === 'linkedin') {
-        return (
-          <div style={{ padding: '12px', fontSize: '0.875rem', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-            {result.content}
-            {result.hashtags?.length > 0 && (
-              <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>{h}</span>)}
-              </div>
-            )}
-          </div>
-        )
-      }
+      if (platform === 'linkedin') return <div style={{ padding: '12px', fontSize: '0.875rem', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{result.content}{result.hashtags?.length > 0 && <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>{result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>{h}</span>)}</div>}</div>
       if (platform === 'carousel') {
         const slides: Array<{ type: string; title: string; body: string }> = JSON.parse(result.content)
-        return (
-          <div>
-            {slides.map((s, i) => (
-              <div key={i} style={{ padding: '10px 12px', borderBottom: i < slides.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-3)', background: 'var(--bg-3)', padding: '1px 6px', borderRadius: '4px' }}>{s.type}</span>
-                  <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>{s.title}</span>
-                </div>
-                <p style={{ fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.5 }}>{s.body}</p>
-              </div>
-            ))}
-          </div>
-        )
+        return <div>{slides.map((s, i) => <div key={i} style={{ padding: '10px 12px', borderBottom: i < slides.length - 1 ? '1px solid var(--border)' : 'none' }}><div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-3)', background: 'var(--bg-3)', padding: '1px 6px', borderRadius: '4px' }}>{s.type}</span><span style={{ fontWeight: 600, fontSize: '0.875rem' }}>{s.title}</span></div><p style={{ fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.5 }}>{s.body}</p></div>)}</div>
       }
     } catch { return <div style={{ padding: '12px', fontSize: '0.875rem' }}>{result.content}</div> }
   }
 
   return (
     <div style={{ borderTop: '1px solid var(--border)' }}>
-      <button onClick={() => setOpen(o => !o)}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text)', borderBottom: open ? '1px solid var(--border)' : 'none' }}>
+      <button onClick={() => setOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text)', borderBottom: open ? '1px solid var(--border)' : 'none' }}>
         <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generate content</span>
         <IconChevron open={open} />
       </button>
@@ -796,8 +1134,7 @@ function GenerationPanel({ paperId }: { paperId: string }) {
         <div style={{ padding: '14px 16px' }}>
           <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
             {(['twitter', 'linkedin', 'carousel'] as Platform[]).map(p => (
-              <button key={p} onClick={() => setPlatform(p)}
-                style={{ flex: 1, padding: '6px', borderRadius: 'var(--radius)', border: `1px solid ${platform === p ? 'var(--accent)' : 'var(--border)'}`, background: platform === p ? 'var(--accent-glow)' : 'transparent', color: platform === p ? 'var(--accent)' : 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', cursor: 'pointer', transition: 'all 0.15s', fontWeight: 500 }}>
+              <button key={p} onClick={() => setPlatform(p)} style={{ flex: 1, padding: '6px', borderRadius: 'var(--radius)', border: `1px solid ${platform === p ? 'var(--accent)' : 'var(--border)'}`, background: platform === p ? 'var(--accent-glow)' : 'transparent', color: platform === p ? 'var(--accent)' : 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', cursor: 'pointer', transition: 'all 0.15s', fontWeight: 500 }}>
                 {p.charAt(0).toUpperCase() + p.slice(1)}
               </button>
             ))}
@@ -806,40 +1143,20 @@ function GenerationPanel({ paperId }: { paperId: string }) {
             <div><label className="label">Style</label><input className="input" value={style} onChange={e => setStyle(e.target.value)} placeholder="e.g. educational" /></div>
             <div><label className="label">Tone</label><input className="input" value={tone} onChange={e => setTone(e.target.value)} placeholder="e.g. conversational" /></div>
           </div>
-          {platform === 'carousel' && (
-            <div style={{ marginBottom: '10px' }}>
-              <label className="label">Color scheme</label>
-              <select className="select" value={colorScheme} onChange={e => setColorScheme(e.target.value)}>
-                <option value="light">Light</option><option value="dark">Dark</option><option value="bold">Bold</option>
-              </select>
-            </div>
-          )}
+          {platform === 'carousel' && <div style={{ marginBottom: '10px' }}><label className="label">Color scheme</label><select className="select" value={colorScheme} onChange={e => setColorScheme(e.target.value)}><option value="light">Light</option><option value="dark">Dark</option><option value="bold">Bold</option></select></div>}
           {error && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{error}</div>}
-          <button className="btn btn-primary btn-full" onClick={handleGenerate} disabled={loading} style={{ marginBottom: '12px' }}>
-            {loading ? <><Spinner />Generating…</> : 'Generate'}
-          </button>
+          <button className="btn btn-primary btn-full" onClick={handleGenerate} disabled={loading} style={{ marginBottom: '12px' }}>{loading ? <><Spinner />Generating…</> : 'Generate'}</button>
           {result && (
             <div className="fade-in" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', marginBottom: '10px' }}>
-              <div style={{ background: 'var(--bg-3)', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-2)' }}>Preview</span>
-              </div>
+              <div style={{ background: 'var(--bg-3)', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-2)' }}>Preview</span></div>
               <div style={{ background: 'var(--bg-2)', maxHeight: '260px', overflowY: 'auto' }}>{renderPreview()}</div>
             </div>
           )}
           {result && (
             <div className="fade-in" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {platform === 'carousel' && (
-                <button className="btn btn-ghost btn-sm" onClick={handleExport} disabled={exporting}>
-                  {exporting ? <><Spinner size="spinner-sm" />Exporting…</> : <><IconDownload />Export PDF</>}
-                </button>
-              )}
+              {platform === 'carousel' && <button className="btn btn-ghost btn-sm" onClick={handleExport} disabled={exporting}>{exporting ? <><Spinner size="spinner-sm" />Exporting…</> : <><IconDownload />Export PDF</>}</button>}
               {exportUrl && <a href={exportUrl} download className="btn btn-ghost btn-sm"><IconDownload />Download PDF</a>}
-              {shareLinks && (
-                <>
-                  <a href={shareLinks.linkedin_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />LinkedIn</a>
-                  <a href={shareLinks.twitter_url}  target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />Twitter/X</a>
-                </>
-              )}
+              {shareLinks && (<><a href={shareLinks.linkedin_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />LinkedIn</a><a href={shareLinks.twitter_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />Twitter/X</a></>)}
             </div>
           )}
         </div>
@@ -852,9 +1169,7 @@ function GenerationPanel({ paperId }: { paperId: string }) {
 // Follow-up suggestions
 // ─────────────────────────────────────────────────────────────────────────────
 
-function FollowUpSuggestions({ lastResponse, onSelect }: {
-  lastResponse: string; onSelect: (q: string) => void
-}) {
+function FollowUpSuggestions({ lastResponse, onSelect }: { lastResponse: string; onSelect: (q: string) => void }) {
   const [questions, setQuestions] = useState<string[]>([])
   const [loading, setLoading]     = useState(false)
   const prevResponse = useRef('')
@@ -863,42 +1178,20 @@ function FollowUpSuggestions({ lastResponse, onSelect }: {
     if (!lastResponse || lastResponse === prevResponse.current) return
     prevResponse.current = lastResponse
     setLoading(true); setQuestions([])
-    fetch('/api/generate/followup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ context: lastResponse }),
-    })
+    fetch('/api/generate/followup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context: lastResponse }) })
       .then(r => r.ok ? r.json() : Promise.reject())
-      .then(data => {
-        if (Array.isArray(data.questions))
-          setQuestions(data.questions.slice(0, 3).map(String).filter(Boolean))
-      })
+      .then(data => { if (Array.isArray(data.questions)) setQuestions(data.questions.slice(0, 3).map(String).filter(Boolean)) })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [lastResponse])
 
   if (!loading && questions.length === 0) return null
-
   return (
     <div className="fade-in" style={{ marginBottom: '16px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-        <IconSparkle />
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontWeight: 500 }}>Suggested follow-ups</span>
-      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}><IconSparkle /><span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontWeight: 500 }}>Suggested follow-ups</span></div>
       {loading
         ? <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Spinner size="spinner-sm" /><span style={{ fontSize: '0.8125rem', color: 'var(--text-3)' }}>Thinking…</span></div>
-        : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {questions.map((q, i) => (
-              <button key={i} onClick={() => onSelect(q)}
-                style={{ textAlign: 'left', padding: '8px 12px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.4, transition: 'all 0.15s' }}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text)' }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-2)' }}>
-                {q}
-              </button>
-            ))}
-          </div>
-        )
+        : <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>{questions.map((q, i) => <button key={i} onClick={() => onSelect(q)} style={{ textAlign: 'left', padding: '8px 12px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.4, transition: 'all 0.15s' }} onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text)' }} onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-2)' }}>{q}</button>)}</div>
       }
     </div>
   )
@@ -919,11 +1212,11 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
 
   async function handleDelete(sessionId: string) {
     setDeleting(sessionId)
-    try { await deleteSession(sessionId); onDelete(sessionId) }
-    catch { /* non-critical */ }
+    try { await deleteSession(sessionId); onDelete(sessionId) } catch { /* non-critical */ }
     finally { setDeleting(null); setConfirmDelete(null) }
   }
 
+  const MODE_COLORS: Record<ChatMode, string> = { standard: 'var(--accent)', study: 'var(--study-color)', technical: 'var(--technical-color)' }
   const groups = groupSessions(sessions)
 
   return (
@@ -935,45 +1228,27 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
         </div>
         <button className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>+ New search</button>
       </div>
-
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-        {sessions.length === 0 && (
-          <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', padding: '16px 8px', textAlign: 'center', lineHeight: 1.6 }}>
-            No sessions yet.<br />Search for a paper to get started.
-          </p>
-        )}
-
+        {sessions.length === 0 && <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', padding: '16px 8px', textAlign: 'center', lineHeight: 1.6 }}>No sessions yet.<br />Search for a paper to get started.</p>}
         {groups.map(group => (
           <div key={group.label}>
-            <p style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '8px 8px 4px' }}>
-              {group.label}
-            </p>
+            <p style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '8px 8px 4px' }}>{group.label}</p>
             {group.sessions.map(s => {
               const isActive   = s.session_id === activeSessionId
               const isConfirm  = confirmDelete === s.session_id
               const isDeleting = deleting === s.session_id
               const modeColor  = MODE_COLORS[s.mode] ?? 'var(--accent)'
-
               return (
-                <div key={s.session_id}
-                  style={{ position: 'relative', borderRadius: 'var(--radius)', marginBottom: '2px', background: isActive ? 'var(--bg-3)' : 'transparent', border: `1px solid ${isActive ? 'var(--border-2)' : 'transparent'}`, transition: 'all 0.12s' }}
+                <div key={s.session_id} style={{ position: 'relative', borderRadius: 'var(--radius)', marginBottom: '2px', background: isActive ? 'var(--bg-3)' : 'transparent', border: `1px solid ${isActive ? 'var(--border-2)' : 'transparent'}`, transition: 'all 0.12s' }}
                   onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-3)' }}
                   onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}>
-                  <button onClick={() => onSelect(s.session_id)}
-                    style={{ width: '100%', textAlign: 'left', padding: '9px 32px 9px 10px', background: 'transparent', border: 'none', cursor: 'pointer', borderRadius: 'var(--radius)' }}>
-                    <p style={{ fontSize: '0.875rem', fontWeight: isActive ? 600 : 400, color: isActive ? 'var(--text)' : 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '3px', lineHeight: 1.3 }}>
-                      {s.title || s.topic || s.session_id}
-                    </p>
+                  <button onClick={() => onSelect(s.session_id)} style={{ width: '100%', textAlign: 'left', padding: '9px 32px 9px 10px', background: 'transparent', border: 'none', cursor: 'pointer', borderRadius: 'var(--radius)' }}>
+                    <p style={{ fontSize: '0.875rem', fontWeight: isActive ? 600 : 400, color: isActive ? 'var(--text)' : 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '3px', lineHeight: 1.3 }}>{s.title || s.topic || s.session_id}</p>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {/* Mode badge */}
-                      <span style={{ fontSize: '0.6rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: modeColor, background: `${modeColor}22`, padding: '1px 5px', borderRadius: '8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        {s.mode}
-                      </span>
-                      <span style={{ fontSize: '0.6875rem', color: isActive ? 'var(--accent)' : 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{s.level}</span>
+                      <span style={{ fontSize: '0.6rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: modeColor, background: `${modeColor}22`, padding: '1px 5px', borderRadius: '8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{s.mode}</span>
                       <span style={{ fontSize: '0.6875rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{relativeTime(s.last_active_at)}</span>
                     </div>
                   </button>
-
                   {!isConfirm && (
                     <button onClick={e => { e.stopPropagation(); setConfirmDelete(s.session_id) }} title="Delete session"
                       style={{ position: 'absolute', top: '50%', right: '6px', transform: 'translateY(-50%)', width: '22px', height: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-3)', borderRadius: '4px', opacity: isActive ? 1 : 0, transition: 'opacity 0.15s, color 0.15s' }}
@@ -982,19 +1257,12 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
                       <IconTrash />
                     </button>
                   )}
-
                   {isConfirm && (
                     <div className="fade-in" style={{ position: 'absolute', inset: 0, background: 'var(--bg-3)', borderRadius: 'var(--radius)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 10px', gap: '6px', border: '1px solid var(--error-bg)' }}>
                       <span style={{ fontSize: '0.8125rem', color: 'var(--text-2)', whiteSpace: 'nowrap' }}>Delete?</span>
                       <div style={{ display: 'flex', gap: '4px' }}>
-                        <button onClick={e => { e.stopPropagation(); handleDelete(s.session_id) }} disabled={isDeleting}
-                          style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: 'none', background: 'var(--error)', color: '#fff', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>
-                          {isDeleting ? '…' : 'Yes'}
-                        </button>
-                        <button onClick={e => { e.stopPropagation(); setConfirmDelete(null) }}
-                          style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>
-                          No
-                        </button>
+                        <button onClick={e => { e.stopPropagation(); handleDelete(s.session_id) }} disabled={isDeleting} style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: 'none', background: 'var(--error)', color: '#fff', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>{isDeleting ? '…' : 'Yes'}</button>
+                        <button onClick={e => { e.stopPropagation(); setConfirmDelete(null) }} style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>No</button>
                       </div>
                     </div>
                   )}
@@ -1012,9 +1280,7 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
 // VIEW 4: Chat
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ChatView({ initialPapers, onNewSearch }: {
-  initialPapers: Paper[]; onNewSearch: () => void
-}) {
+function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNewSearch: () => void }) {
   const [sessions, setSessions]           = useState<Session[]>([])
   const [activeSession, setActiveSession] = useState<SessionDetail | null>(null)
   const [messages, setMessages]           = useState<Message[]>([])
@@ -1037,9 +1303,7 @@ function ChatView({ initialPapers, onNewSearch }: {
     try {
       const res = await listSessions()
       setSessions(res.sessions)
-      if (res.sessions.length > 0 && !activeSession) {
-        await openSession(res.sessions[0].session_id)
-      }
+      if (res.sessions.length > 0 && !activeSession) await openSession(res.sessions[0].session_id)
     } catch { /* non-critical */ }
   }
 
@@ -1055,61 +1319,36 @@ function ChatView({ initialPapers, onNewSearch }: {
         const papersRes = await listPapers({ stage: 'processed' })
         const current = papersRes.papers.find(p => p.paper_id === res.session.paper_id)
         setActivePaper(current ?? initialPapers.find(p => p.paper_id === res.session.paper_id) ?? null)
-      } catch {
-        setActivePaper(initialPapers.find(p => p.paper_id === res.session.paper_id) ?? null)
-      }
-    } catch (err: unknown) {
-      setSessError(err instanceof Error ? err.message : 'Failed to load session.')
-    }
+      } catch { setActivePaper(initialPapers.find(p => p.paper_id === res.session.paper_id) ?? null) }
+    } catch (err: unknown) { setSessError(err instanceof Error ? err.message : 'Failed to load session.') }
   }
 
   function handleSessionDeleted(sessionId: string) {
     setSessions(prev => prev.filter(s => s.session_id !== sessionId))
-    if (activeSession?.session_id === sessionId) {
-      setActiveSession(null); setMessages([]); setActivePaper(null)
-    }
+    if (activeSession?.session_id === sessionId) { setActiveSession(null); setMessages([]); setActivePaper(null) }
   }
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
-  // ── Mode switching: create a new session for the same paper ───────────────
   async function handleModeSwitch(newMode: ChatMode) {
     if (!activePaper || newMode === chatMode || modeSwitching) return
     setModeSwitching(true); setSessError('')
-
     try {
-      // Check if a session already exists for this paper + mode combination
-      const existing = sessions.find(
-        s => s.paper_id === activePaper.paper_id && s.mode === newMode
-      )
-
+      const existing = sessions.find(s => s.paper_id === activePaper.paper_id && s.mode === newMode)
       if (existing) {
-        // Re-use the existing session for this mode
         await openSession(existing.session_id)
       } else {
-        // Create a brand-new session for the new mode
         const res = await createSession({
           paper_id: activePaper.paper_id,
-          topic:    activeSession?.topic ?? activePaper.title ?? activePaper.paper_id,
-          level,
-          mode:     newMode,
+          topic: activeSession?.topic ?? activePaper.title ?? activePaper.paper_id,
+          level, mode: newMode,
         })
-        const newSession = res.session
-        setSessions(prev => [
-          { ...newSession, messages: undefined as unknown as Message[] } as unknown as Session,
-          ...prev,
-        ])
-        await openSession(newSession.session_id)
+        setSessions(prev => [res.session as unknown as Session, ...prev])
+        await openSession(res.session.session_id)
       }
-
       setChatMode(newMode)
-    } catch (err: unknown) {
-      setSessError(err instanceof Error ? err.message : 'Failed to switch mode.')
-    } finally {
-      setModeSwitching(false)
-    }
+    } catch (err: unknown) { setSessError(err instanceof Error ? err.message : 'Failed to switch mode.') }
+    finally { setModeSwitching(false) }
   }
 
   async function handleSend(e: React.FormEvent) {
@@ -1127,11 +1366,7 @@ function ChatView({ initialPapers, onNewSearch }: {
       const res = await sendMessage(activeSession.session_id, text, level)
       const assistantMsg: Message = { id: Date.now() + 1, role: 'assistant', content: res.response, level, created_at: null }
       setMessages(prev => [...prev, assistantMsg])
-      setSessions(prev => prev.map(s =>
-        s.session_id === activeSession.session_id
-          ? { ...s, last_active_at: new Date().toISOString() }
-          : s
-      ))
+      setSessions(prev => prev.map(s => s.session_id === activeSession.session_id ? { ...s, last_active_at: new Date().toISOString() } : s))
     } catch (err: unknown) {
       setChatError(err instanceof Error ? err.message : 'Message failed.')
       setMessages(prev => prev.filter(m => m.id !== tempMsg.id))
@@ -1141,9 +1376,7 @@ function ChatView({ initialPapers, onNewSearch }: {
 
   async function handleLevelChange(newLevel: Level) {
     setLevel(newLevel)
-    if (activeSession) {
-      try { await updateLevel(activeSession.session_id, newLevel) } catch { /* non-critical */ }
-    }
+    if (activeSession) { try { await updateLevel(activeSession.session_id, newLevel) } catch { /* non-critical */ } }
   }
 
   const paperIsReady = activePaper?.pipeline_stage === 'processed' && (activePaper?.chunk_count ?? 0) > 0
@@ -1151,17 +1384,9 @@ function ChatView({ initialPapers, onNewSearch }: {
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      <SessionSidebar sessions={sessions} activeSessionId={activeSession?.session_id ?? null}
+        onSelect={openSession} onDelete={handleSessionDeleted} onNewSearch={onNewSearch} />
 
-      {/* ── Sidebar ── */}
-      <SessionSidebar
-        sessions={sessions}
-        activeSessionId={activeSession?.session_id ?? null}
-        onSelect={openSession}
-        onDelete={handleSessionDeleted}
-        onNewSearch={onNewSearch}
-      />
-
-      {/* ── Main area ── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
 
         {/* Header */}
@@ -1170,48 +1395,37 @@ function ChatView({ initialPapers, onNewSearch }: {
             <p style={{ fontWeight: 600, fontSize: '0.9375rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {activeSession?.title ?? activeSession?.topic ?? activePaper?.title ?? 'Select a session'}
             </p>
-            {activePaper && (
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-                {activePaper.source} · {activePaper.chunk_count} chunks
-              </p>
-            )}
+            {activePaper && <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{activePaper.source} · {activePaper.chunk_count} chunks</p>}
             {sessError && <p style={{ fontSize: '0.8125rem', color: 'var(--error)' }}>{sessError}</p>}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
 
-            {/* ── Chat mode selector ── */}
+            {/* Chat mode selector */}
             <div style={{ display: 'flex', background: 'var(--bg-3)', borderRadius: 'var(--radius)', padding: '3px', border: '1px solid var(--border)', gap: '2px' }}>
               {CHAT_MODES.map(m => {
                 const isActive = chatMode === m.id
                 return (
                   <button key={m.id} onClick={() => handleModeSwitch(m.id)}
-                    disabled={modeSwitching || !activePaper}
-                    title={m.description}
-                    style={{
-                      padding: '5px 12px', borderRadius: '6px', border: 'none',
-                      cursor: modeSwitching || !activePaper ? 'not-allowed' : 'pointer',
-                      fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', fontWeight: 500,
-                      transition: 'all 0.15s',
-                      background: isActive ? m.color + '22' : 'transparent',
-                      color: isActive ? m.color : 'var(--text-3)',
-                      opacity: modeSwitching ? 0.6 : 1,
-                    }}>
+                    disabled={modeSwitching || !activePaper} title={m.description}
+                    style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', cursor: modeSwitching || !activePaper ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', fontWeight: 500, transition: 'all 0.15s', background: isActive ? m.color + '22' : 'transparent', color: isActive ? m.color : 'var(--text-3)', opacity: modeSwitching ? 0.6 : 1 }}>
                     {modeSwitching && isActive ? <Spinner size="spinner-sm" /> : m.label}
                   </button>
                 )
               })}
             </div>
 
-            {/* Level selector */}
-            <div style={{ display: 'flex', gap: '4px' }}>
-              {(['beginner', 'intermediate', 'advanced'] as Level[]).map(l => (
-                <button key={l} onClick={() => handleLevelChange(l)}
-                  style={{ padding: '4px 10px', borderRadius: '20px', border: `1px solid ${level === l ? 'var(--accent)' : 'var(--border)'}`, background: level === l ? 'var(--accent-glow)' : 'transparent', color: level === l ? 'var(--accent)' : 'var(--text-3)', fontFamily: 'var(--font-sans)', fontSize: '0.75rem', cursor: 'pointer', transition: 'all 0.12s', fontWeight: 500 }}>
-                  {l.charAt(0).toUpperCase() + l.slice(1)}
-                </button>
-              ))}
-            </div>
+            {/* Level selector — ONLY shown in standard/chat mode */}
+            {chatMode === 'standard' && (
+              <div style={{ display: 'flex', gap: '4px' }}>
+                {(['beginner', 'intermediate', 'advanced'] as Level[]).map(l => (
+                  <button key={l} onClick={() => handleLevelChange(l)}
+                    style={{ padding: '4px 10px', borderRadius: '20px', border: `1px solid ${level === l ? 'var(--accent)' : 'var(--border)'}`, background: level === l ? 'var(--accent-glow)' : 'transparent', color: level === l ? 'var(--accent)' : 'var(--text-3)', fontFamily: 'var(--font-sans)', fontSize: '0.75rem', cursor: 'pointer', transition: 'all 0.12s', fontWeight: 500 }}>
+                    {l.charAt(0).toUpperCase() + l.slice(1)}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <button onClick={() => setGenerateOpen(o => !o)} className="btn btn-ghost btn-sm"
               style={{ borderColor: generateOpen ? 'var(--accent)' : undefined, color: generateOpen ? 'var(--accent)' : undefined }}>
@@ -1223,7 +1437,7 @@ function ChatView({ initialPapers, onNewSearch }: {
         {/* Body */}
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
-          {/* Messages */}
+          {/* Main content area — switches based on mode */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
 
             {/* Mode context banner */}
@@ -1235,69 +1449,80 @@ function ChatView({ initialPapers, onNewSearch }: {
               </div>
             )}
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-              {!activeSession && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                  <p style={{ color: 'var(--text-3)', textAlign: 'center', fontSize: '0.9375rem' }}>
-                    {sessions.length === 0 ? 'Waiting for papers to process…' : 'Select a session from the sidebar'}
-                  </p>
+            {/* Study mode — full panel */}
+            {chatMode === 'study' && activePaper && (
+              <div style={{ flex: 1, overflowY: 'auto' }}>
+                <StudyPanel paperId={activePaper.paper_id} />
+              </div>
+            )}
+
+            {/* Technical mode — full panel */}
+            {chatMode === 'technical' && activePaper && (
+              <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <TechnicalPanel paperId={activePaper.paper_id} />
+              </div>
+            )}
+
+            {/* Standard chat mode */}
+            {chatMode === 'standard' && (
+              <>
+                <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+                  {!activeSession && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                      <p style={{ color: 'var(--text-3)', textAlign: 'center', fontSize: '0.9375rem' }}>
+                        {sessions.length === 0 ? 'Waiting for papers to process…' : 'Select a session from the sidebar'}
+                      </p>
+                    </div>
+                  )}
+                  {messages.map((msg, i) => (
+                    <div key={msg.id ?? i} className="fade-in"
+                      style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: '14px' }}>
+                      <div style={{ maxWidth: '72%', padding: '10px 14px', borderRadius: 'var(--radius-lg)', background: msg.role === 'user' ? 'var(--accent)' : 'var(--bg-3)', color: msg.role === 'user' ? '#fff' : 'var(--text)', fontSize: '0.9rem', lineHeight: 1.6, borderBottomRightRadius: msg.role === 'user' ? '4px' : undefined, borderBottomLeftRadius: msg.role === 'assistant' ? '4px' : undefined }}>
+                        {msg.role === 'assistant'
+                          ? <MarkdownWithMermaid content={msg.content} />
+                          : msg.content
+                        }
+                      </div>
+                    </div>
+                  ))}
+                  {sending && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '14px' }}>
+                      <div style={{ padding: '10px 14px', borderRadius: 'var(--radius-lg)', borderBottomLeftRadius: '4px', background: 'var(--bg-3)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Spinner size="spinner-sm" />
+                        <span style={{ fontSize: '0.875rem', color: 'var(--text-3)' }}>Thinking…</span>
+                      </div>
+                    </div>
+                  )}
+                  {activeSession && !sending && lastAssistantMessage && (
+                    <FollowUpSuggestions lastResponse={lastAssistantMessage} onSelect={q => submitMessage(q)} />
+                  )}
+                  <div ref={bottomRef} />
                 </div>
-              )}
 
-              {messages.map((msg, i) => (
-                <div key={msg.id ?? i} className="fade-in"
-                  style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: '14px' }}>
-                  <div style={{
-                    maxWidth: '72%', padding: '10px 14px',
-                    borderRadius: 'var(--radius-lg)',
-                    background: msg.role === 'user' ? 'var(--accent)' : 'var(--bg-3)',
-                    color: msg.role === 'user' ? '#fff' : 'var(--text)',
-                    fontSize: '0.9rem', lineHeight: 1.6,
-                    borderBottomRightRadius: msg.role === 'user'      ? '4px' : undefined,
-                    borderBottomLeftRadius:  msg.role === 'assistant' ? '4px' : undefined,
-                  }}>
-                    {msg.role === 'assistant'
-                      ? <div className="md-body"><ReactMarkdown>{msg.content}</ReactMarkdown></div>
-                      : msg.content
-                    }
-                  </div>
+                {/* Chat input */}
+                <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--bg-2)', flexShrink: 0 }}>
+                  {chatError && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{chatError}</div>}
+                  <form onSubmit={handleSend} style={{ display: 'flex', gap: '8px' }}>
+                    <input className="input" value={input} onChange={e => setInput(e.target.value)}
+                      placeholder={!activeSession ? 'Waiting for a session…' : 'Ask anything about this paper…'}
+                      disabled={!activeSession || sending} maxLength={2000} style={{ flex: 1 }} />
+                    <button type="submit" className="btn btn-primary"
+                      disabled={!activeSession || !input.trim() || sending} style={{ flexShrink: 0 }}>
+                      <IconSend />
+                    </button>
+                  </form>
                 </div>
-              ))}
+              </>
+            )}
 
-              {sending && (
-                <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '14px' }}>
-                  <div style={{ padding: '10px 14px', borderRadius: 'var(--radius-lg)', borderBottomLeftRadius: '4px', background: 'var(--bg-3)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Spinner size="spinner-sm" />
-                    <span style={{ fontSize: '0.875rem', color: 'var(--text-3)' }}>Thinking…</span>
-                  </div>
-                </div>
-              )}
-
-              {activeSession && !sending && lastAssistantMessage && (
-                <FollowUpSuggestions lastResponse={lastAssistantMessage} onSelect={q => submitMessage(q)} />
-              )}
-
-              <div ref={bottomRef} />
-            </div>
-
-            {/* Input */}
-            <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--bg-2)', flexShrink: 0 }}>
-              {chatError && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{chatError}</div>}
-              <form onSubmit={handleSend} style={{ display: 'flex', gap: '8px' }}>
-                <input className="input" value={input} onChange={e => setInput(e.target.value)}
-                  placeholder={
-                    !activeSession ? 'Waiting for a session…'
-                    : chatMode === 'study' ? 'Ask for flashcards, questions, or examples…'
-                    : chatMode === 'technical' ? 'Ask for system design, APIs, or implementation…'
-                    : 'Ask anything about this paper…'
-                  }
-                  disabled={!activeSession || sending} maxLength={2000} style={{ flex: 1 }} />
-                <button type="submit" className="btn btn-primary"
-                  disabled={!activeSession || !input.trim() || sending} style={{ flexShrink: 0 }}>
-                  <IconSend />
-                </button>
-              </form>
-            </div>
+            {/* No paper selected in study/technical */}
+            {(chatMode === 'study' || chatMode === 'technical') && !activePaper && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
+                <p style={{ color: 'var(--text-3)', textAlign: 'center', fontSize: '0.9375rem' }}>
+                  Select a session from the sidebar to begin.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Generate panel */}
@@ -1305,13 +1530,7 @@ function ChatView({ initialPapers, onNewSearch }: {
             <div className="fade-in" style={{ width: '300px', flexShrink: 0, borderLeft: '1px solid var(--border)', overflowY: 'auto', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
               {paperIsReady
                 ? <GenerationPanel paperId={activePaper!.paper_id} />
-                : (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '120px', padding: '20px' }}>
-                    <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', textAlign: 'center', lineHeight: 1.6 }}>
-                      Paper must finish processing before you can generate content.
-                    </p>
-                  </div>
-                )
+                : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '120px', padding: '20px' }}><p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', textAlign: 'center', lineHeight: 1.6 }}>Paper must finish processing before you can generate content.</p></div>
               }
             </div>
           )}
@@ -1333,46 +1552,22 @@ export default function App() {
   function handleSearchResults(results: PaperPreview[]) {
     setSearchResults(results)
     if (results.length === 1 && results[0].source === 'local') {
-      setPapers([{
-        paper_id: results[0].paper_id, source: 'local',
-        title: results[0].title, abstract: results[0].abstract,
-        authors: results[0].authors, url: results[0].url,
-        pipeline_stage: 'pending', chunk_count: 0,
-        error_message: null, topic: null, created_at: null, processed_at: null,
-      }])
+      setPapers([{ paper_id: results[0].paper_id, source: 'local', title: results[0].title, abstract: results[0].abstract, authors: results[0].authors, url: results[0].url, pipeline_stage: 'pending', chunk_count: 0, error_message: null, topic: null, created_at: null, processed_at: null }])
       setView('processing')
-    } else {
-      setView('selection')
-    }
+    } else { setView('selection') }
   }
 
   function handleSelection(selected: PaperPreview[]) {
-    setPapers(selected.map(p => ({
-      paper_id: p.paper_id, source: p.source,
-      title: p.title, abstract: p.abstract,
-      authors: p.authors, url: p.url,
-      pipeline_stage: 'pending' as const, chunk_count: 0,
-      error_message: null, topic: null, created_at: null, processed_at: null,
-    })))
+    setPapers(selected.map(p => ({ paper_id: p.paper_id, source: p.source, title: p.title, abstract: p.abstract, authors: p.authors, url: p.url, pipeline_stage: 'pending' as const, chunk_count: 0, error_message: null, topic: null, created_at: null, processed_at: null })))
     setView('processing')
-  }
-
-  function handleProcessingDone(processedPapers: Paper[]) {
-    setPapers(processedPapers)
-    setView('chat')
-  }
-
-  function handleNewSearch() {
-    setSearchResults([])
-    setView('search')
   }
 
   return (
     <>
       {view === 'search'     && <SearchView onResults={handleSearchResults} />}
       {view === 'selection'  && <SelectionView papers={searchResults} onSelect={handleSelection} onBack={() => setView('search')} />}
-      {view === 'processing' && <ProcessingView papers={papers} onDone={handleProcessingDone} />}
-      {view === 'chat'       && <ChatView initialPapers={papers} onNewSearch={handleNewSearch} />}
+      {view === 'processing' && <ProcessingView papers={papers} onDone={p => { setPapers(p); setView('chat') }} />}
+      {view === 'chat'       && <ChatView initialPapers={papers} onNewSearch={() => { setSearchResults([]); setView('search') }} />}
     </>
   )
 }
