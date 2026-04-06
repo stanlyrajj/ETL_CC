@@ -10,83 +10,13 @@ from google.genai import types
 
 from config import cfg
 from llm.base import LLMProvider, parse_json_response, sanitize_context
+from llm.openai import (
+    _CHAT_PROMPT, _TWITTER_PROMPT, _LINKEDIN_PROMPT, _CAROUSEL_PROMPT,
+    _STUDY_OUTLINE_PROMPT, _STUDY_SECTION_PROMPT, _FLASHCARD_PROMPT,
+    _TECHNICAL_SECTION_PROMPTS,
+)
 
 logger = logging.getLogger(__name__)
-
-_CHAT_PROMPT = """You are helping a user understand the following research paper.
-
-Paper title: {title}
-Authors: {authors}
-
-{context}
-
-The user's knowledge level is: {level}
-- beginner: use plain language, avoid jargon, use analogies
-- intermediate: assume basic domain knowledge
-- advanced: use technical language freely
-
-Respond to the user's message based only on the paper content above."""
-
-_TWITTER_PROMPT = """Based on the research paper below, create an engaging Twitter/X thread.
-
-Paper title: {title}
-Style: {style}
-Tone: {tone}
-
-{context}
-
-Return ONLY a JSON object with this exact structure:
-{{
-  "tweets": [
-    {{"index": 1, "content": "tweet text here"}},
-    {{"index": 2, "content": "tweet text here"}}
-  ],
-  "hashtags": ["hashtag1", "hashtag2"]
-}}
-
-Each tweet must be under 280 characters. Create 5-8 tweets. No markdown, no extra text."""
-
-_LINKEDIN_PROMPT = """Based on the research paper below, write a professional LinkedIn post.
-
-Paper title: {title}
-Style: {style}
-Tone: {tone}
-
-{context}
-
-Return ONLY a JSON object with this exact structure:
-{{
-  "post": "full post text here",
-  "hashtags": ["hashtag1", "hashtag2"],
-  "hook": "opening line that grabs attention"
-}}
-
-No markdown, no extra text."""
-
-_CAROUSEL_PROMPT = """Based on the research paper below, create LinkedIn carousel slide content.
-
-Paper title: {title}
-Style: {style}
-Tone: {tone}
-Color scheme: {color_scheme}
-
-{context}
-
-Return ONLY a JSON object with this exact structure:
-{{
-  "slides": [
-    {{
-      "index": 1,
-      "heading": "slide heading",
-      "body": "slide body text",
-      "speaker_note": "what to say about this slide"
-    }}
-  ],
-  "title": "carousel title",
-  "subtitle": "carousel subtitle"
-}}
-
-Create 6-8 slides. Keep each slide concise. No markdown, no extra text."""
 
 
 class GeminiProvider(LLMProvider):
@@ -94,7 +24,7 @@ class GeminiProvider(LLMProvider):
         self._client     = genai.Client(api_key=cfg.LLM_API_KEY)
         self._model_name = cfg.LLM_MODEL
 
-    def _chat_sync(self, system: str, history: list[dict], message: str) -> str:
+    def _chat_sync(self, system: str, history: list[dict], message: str, max_tokens: int = 2048) -> str:
         contents = []
         for msg in history:
             role = "user" if msg["role"] == "user" else "model"
@@ -103,15 +33,21 @@ class GeminiProvider(LLMProvider):
         response = self._client.models.generate_content(
             model=self._model_name,
             contents=contents,
-            config=types.GenerateContentConfig(system_instruction=system),
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=max_tokens,
+            ),
         )
         return response.text or ""
 
-    def _generate_sync(self, system: str, prompt: str) -> str:
+    def _generate_sync(self, system: str, prompt: str, max_tokens: int = 2048) -> str:
         response = self._client.models.generate_content(
             model=self._model_name,
             contents=prompt,
-            config=types.GenerateContentConfig(system_instruction=system),
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=max_tokens,
+            ),
         )
         return response.text or ""
 
@@ -125,49 +61,74 @@ class GeminiProvider(LLMProvider):
                 last_exc = exc
                 if attempt < cfg.MAX_RETRIES:
                     wait = 2 ** attempt
-                    logger.warning(
-                        "Gemini attempt %d/%d failed: %s — retrying in %ds",
-                        attempt, cfg.MAX_RETRIES, exc, wait,
-                    )
+                    logger.warning("Gemini attempt %d/%d failed: %s — retrying in %ds",
+                                   attempt, cfg.MAX_RETRIES, exc, wait)
                     await asyncio.sleep(wait)
-        raise RuntimeError(
-            f"Gemini call failed after {cfg.MAX_RETRIES} attempts: {last_exc}"
-        ) from last_exc
+        raise RuntimeError(f"Gemini call failed after {cfg.MAX_RETRIES} attempts: {last_exc}") from last_exc
 
-    async def chat_response(
-        self, context, title, authors, history, message, level, mode="standard"
-    ) -> str:
+    # ── Chat ──────────────────────────────────────────────────────────────────
+
+    async def chat_response(self, context, title, authors, history, message, level, mode="standard") -> str:
         safe_context  = sanitize_context(context)
         system_prompt = self.get_system_prompt(mode)
         system        = system_prompt + "\n\n" + _CHAT_PROMPT.format(
-            title=title,
-            authors=", ".join(authors) if authors else "Unknown",
-            context=safe_context,
-            level=level,
+            title=title, authors=", ".join(authors) if authors else "Unknown",
+            context=safe_context, level=level,
         )
         return await self._with_retry(self._chat_sync, system, history, message)
 
+    # ── Social ────────────────────────────────────────────────────────────────
+
     async def generate_twitter_thread(self, context, title, style, tone) -> dict:
         safe_context = sanitize_context(context)
-        prompt = _TWITTER_PROMPT.format(
-            title=title, style=style, tone=tone, context=safe_context
-        )
+        prompt = _TWITTER_PROMPT.format(title=title, style=style, tone=tone, context=safe_context)
         raw = await self._with_retry(self._generate_sync, self.SYSTEM_PROMPT, prompt)
         return parse_json_response(raw)
 
     async def generate_linkedin_post(self, context, title, style, tone) -> dict:
         safe_context = sanitize_context(context)
-        prompt = _LINKEDIN_PROMPT.format(
-            title=title, style=style, tone=tone, context=safe_context
-        )
+        prompt = _LINKEDIN_PROMPT.format(title=title, style=style, tone=tone, context=safe_context)
         raw = await self._with_retry(self._generate_sync, self.SYSTEM_PROMPT, prompt)
         return parse_json_response(raw)
 
     async def generate_carousel_content(self, context, title, style, tone, color_scheme) -> dict:
         safe_context = sanitize_context(context)
-        prompt = _CAROUSEL_PROMPT.format(
-            title=title, style=style, tone=tone,
-            color_scheme=color_scheme, context=safe_context
-        )
+        prompt = _CAROUSEL_PROMPT.format(title=title, style=style, tone=tone,
+                                         color_scheme=color_scheme, context=safe_context)
         raw = await self._with_retry(self._generate_sync, self.SYSTEM_PROMPT, prompt)
         return parse_json_response(raw)
+
+    # ── Study ─────────────────────────────────────────────────────────────────
+
+    async def generate_study_outline(self, context, title) -> dict:
+        safe_context = sanitize_context(context)
+        prompt = _STUDY_OUTLINE_PROMPT.format(title=title, context=safe_context)
+        raw = await self._with_retry(self._generate_sync, self.STUDY_SYSTEM_PROMPT, prompt, 1024)
+        return parse_json_response(raw)
+
+    async def generate_study_section(self, context, title, section_title, section_description) -> str:
+        safe_context = sanitize_context(context)
+        prompt = _STUDY_SECTION_PROMPT.format(
+            title=title, section_title=section_title,
+            section_description=section_description, context=safe_context,
+        )
+        return await self._with_retry(self._generate_sync, self.STUDY_SYSTEM_PROMPT, prompt, 2048)
+
+    async def generate_flashcards(self, context, title) -> dict:
+        safe_context = sanitize_context(context)
+        prompt = _FLASHCARD_PROMPT.format(title=title, context=safe_context)
+        raw = await self._with_retry(self._generate_sync, self.STUDY_SYSTEM_PROMPT, prompt, 1500)
+        return parse_json_response(raw)
+
+    # ── Technical ─────────────────────────────────────────────────────────────
+
+    async def generate_technical_section(
+        self, context, title, section_key, section_label, prev_sections
+    ) -> str:
+        safe_context = sanitize_context(context)
+        template = _TECHNICAL_SECTION_PROMPTS[section_key]
+        prompt = template.format(
+            title=title, context=safe_context,
+            prev_sections=prev_sections if prev_sections else "",
+        )
+        return await self._with_retry(self._generate_sync, self.TECHNICAL_SYSTEM_PROMPT, prompt, 2048)
