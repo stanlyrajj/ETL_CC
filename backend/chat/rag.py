@@ -2,7 +2,8 @@
 rag.py — Retrieval-augmented chat response.
 
 respond() is the single entry point. It retrieves relevant chunks,
-builds context, calls the LLM, saves the exchange, and returns the response.
+builds context, calls the LLM with the correct mode prompt,
+saves the exchange, and returns the response.
 """
 
 import logging
@@ -16,14 +17,12 @@ from processing.embedder import embed
 logger = logging.getLogger(__name__)
 
 _MAX_CONTEXT_CHARS  = 4000
-_MAX_HISTORY_MSGS   = 20   # keep last N messages to prevent context overflow
+_MAX_HISTORY_MSGS   = 20
 
-# Shared VectorStore instance — created once on first call
 _vector_store: VectorStore | None = None
 
 
 def _get_vector_store() -> VectorStore:
-    """Return the shared VectorStore, creating it on first call."""
     global _vector_store
     if _vector_store is None:
         _vector_store = VectorStore(embed_fn=embed)
@@ -38,23 +37,20 @@ async def respond(session_id: str, message: str, level: str) -> str:
     """
     Generate a grounded response to a user message.
 
-    Steps (in order):
-    1. Retrieve top 5 relevant chunks from ChromaDB
-    2. Raise RAGException if retrieval fails or returns nothing
-    3. Build a context string from retrieved chunks, max 4000 chars
-    4. Raise RAGException if context is empty after assembly
-    5. Get message history for the session (truncated to last 20)
-    6. Call the LLM with context, history, message, and level
-    7. Save both user message and assistant response atomically
-    8. Return the assistant response string
+    The session's mode field controls which system prompt is used:
+      standard  — general research assistant
+      study     — flashcards, questions, examples
+      technical — system design, API structures, scalability
     """
-    # ── 1. Retrieve top 5 relevant chunks ─────────────────────────────────────
+    # ── 1. Load session ───────────────────────────────────────────────────────
     session = await get_session(session_id)
     if session is None:
         raise RAGException(f"Session not found: {session_id!r}")
 
     paper_id = session["paper_id"]
+    mode     = session.get("mode", "standard")
 
+    # ── 2. Retrieve relevant chunks ───────────────────────────────────────────
     try:
         vs = _get_vector_store()
         results = await vs.query(
@@ -67,14 +63,13 @@ async def respond(session_id: str, message: str, level: str) -> str:
             f"Vector store retrieval failed for paper_id={paper_id!r}: {exc}"
         ) from exc
 
-    # ── 2. Raise if retrieval returned nothing ─────────────────────────────────
     if not results:
         raise RAGException(
             f"No relevant content found for paper_id={paper_id!r}. "
             "Ensure the paper has been processed and embedded before chatting."
         )
 
-    # ── 3. Build context string, truncated to _MAX_CONTEXT_CHARS ──────────────
+    # ── 3. Build context ──────────────────────────────────────────────────────
     context_parts = []
     total = 0
     for result in results:
@@ -89,16 +84,13 @@ async def respond(session_id: str, message: str, level: str) -> str:
 
     context = "\n\n".join(context_parts)
 
-    # ── 4. Raise if context is empty after assembly ────────────────────────────
-    # Guard against results whose content fields are all empty strings.
     if not context.strip():
         raise RAGException(
             f"Retrieved chunks contain no usable content for paper_id={paper_id!r}. "
             "The paper may need to be re-processed."
         )
 
-    # ── 5. Get message history, truncated to last _MAX_HISTORY_MSGS ───────────
-    # Truncate before building the list to prevent LLM context overflow.
+    # ── 4. Truncate history ───────────────────────────────────────────────────
     all_messages = session["messages"]
     if len(all_messages) > _MAX_HISTORY_MSGS:
         all_messages = all_messages[-_MAX_HISTORY_MSGS:]
@@ -108,36 +100,28 @@ async def respond(session_id: str, message: str, level: str) -> str:
         for msg in all_messages
     ]
 
-    # ── 6. Call the LLM ───────────────────────────────────────────────────────
+    # ── 5. Call LLM with mode-aware system prompt ─────────────────────────────
     provider = get_provider()
-
-    # FIX: Resolve title correctly — prefer session["title"] (set from paper.title
-    # after extraction), fall back to session["topic"], then a safe default.
-    # Previously only session["topic"] was used, so the LLM prompt always showed
-    # the search topic string instead of the paper's actual title.
-    title = session.get("title") or session.get("topic") or "Research Paper"
-    authors: list[str] = []
+    title    = session.get("title") or session.get("topic") or "Research Paper"
 
     response = await provider.chat_response(
         context=context,
         title=title,
-        authors=authors,
+        authors=[],
         history=history,
         message=message,
         level=level,
+        mode=mode,
     )
 
-    # ── 7. Save user message and assistant response atomically ────────────────
-    # Both writes share a single db.session() so a crash between them cannot
-    # leave an orphaned user message with no matching assistant reply.
+    # ── 6. Save atomically ────────────────────────────────────────────────────
     async with db.session() as sess:
         await db.add_message(sess, session_id, role="user",      content=message,  level=level)
         await db.add_message(sess, session_id, role="assistant", content=response, level=level)
 
     logger.info(
-        "RAG response: session=%s paper=%s level=%s context_chars=%d response_chars=%d",
-        session_id, paper_id, level, len(context), len(response),
+        "RAG response: session=%s paper=%s level=%s mode=%s context_chars=%d response_chars=%d",
+        session_id, paper_id, level, mode, len(context), len(response),
     )
 
-    # ── 8. Return the response ────────────────────────────────────────────────
     return response
