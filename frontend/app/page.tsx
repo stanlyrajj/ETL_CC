@@ -150,7 +150,6 @@ function MermaidBlock({ code }: { code: string }) {
 
 // ── MarkdownWithMermaid — renders markdown and detects mermaid blocks ─────────
 function MarkdownWithMermaid({ content, className = 'md-body' }: { content: string; className?: string }) {
-  // Split content into mermaid blocks and regular markdown
   const parts = content.split(/(```mermaid[\s\S]*?```)/g)
   return (
     <div className={className}>
@@ -265,7 +264,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
   const totalSections = outline?.sections.length ?? 0
   const progress = totalSections > 0 ? ((sections.length) / totalSections) * 100 : 0
 
-  // ── Idle ──
   if (phase === 'idle') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
@@ -284,7 +282,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
     )
   }
 
-  // ── Loading outline ──
   if (phase === 'loading_outline') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '16px' }}>
@@ -294,7 +291,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
     )
   }
 
-  // ── Error ──
   if (phase === 'error') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
@@ -304,7 +300,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
     )
   }
 
-  // ── Outline approval ──
   if (phase === 'outline' && outline) {
     return (
       <div style={{ padding: '24px', maxWidth: '680px', margin: '0 auto' }}>
@@ -337,14 +332,12 @@ function StudyPanel({ paperId }: { paperId: string }) {
     )
   }
 
-  // ── Teaching phase ──
   if (phase === 'teaching') {
-    const allLoaded    = sections.length === totalSections
+    const allLoaded     = sections.length === totalSections
     const isLastSection = currentSection === totalSections - 1
 
     return (
       <div style={{ padding: '24px', maxWidth: '720px', margin: '0 auto' }}>
-        {/* Progress */}
         <div style={{ marginBottom: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
             <span style={{ fontSize: '0.8125rem', color: 'var(--study-color)', fontWeight: 500 }}>
@@ -359,7 +352,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
           </div>
         </div>
 
-        {/* Rendered sections */}
         {sections.map((s, i) => (
           <div key={i} className="study-section-block">
             <div className="study-section-header">
@@ -370,7 +362,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
           </div>
         ))}
 
-        {/* Loading next section */}
         {sectionLoading && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '16px', color: 'var(--text-3)', fontSize: '0.875rem' }}>
             <Spinner size="spinner-sm" />
@@ -380,7 +371,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
 
         {error && <div className="notice notice-error" style={{ marginBottom: '12px' }}>{error}</div>}
 
-        {/* Next button — only show when the current section has loaded */}
         {!sectionLoading && sections.length > currentSection && (
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
             {flashcardsLoading
@@ -401,7 +391,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
     )
   }
 
-  // ── Flashcards phase ──
   if (phase === 'flashcards' && flashcards.length > 0) {
     const card = flashcards[cardIndex]
     return (
@@ -413,7 +402,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
           </p>
         </div>
 
-        {/* Progress dots */}
         <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginBottom: '20px' }}>
           {flashcards.map((_, i) => (
             <button key={i} onClick={() => { setCardIndex(i); setFlipped(false) }}
@@ -421,7 +409,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
           ))}
         </div>
 
-        {/* Flip card */}
         <div className={`flashcard-scene${flipped ? ' flipped' : ''}`} onClick={() => setFlipped(f => !f)}>
           <div className="flashcard-inner">
             <div className="flashcard-front">
@@ -436,7 +423,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
           </div>
         </div>
 
-        {/* Navigation */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px' }}>
           <button className="btn btn-ghost btn-sm" onClick={prevCard} disabled={cardIndex === 0}>← Previous</button>
           <button className="btn btn-ghost btn-sm" onClick={() => { setPhase('idle'); setSections([]); setOutline(null) }}>
@@ -496,7 +482,6 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
             const d = JSON.parse(e.data)
             setSections(prev => [...prev, { key: d.section_key, label: d.section_label, content: d.content }])
             setActiveKey(d.section_key)
-            // Set next loading key
             const nextIdx = d.section_index + 1
             if (nextIdx < TECHNICAL_SECTION_DEFS.length) {
               setLoadingKey(TECHNICAL_SECTION_DEFS[nextIdx].key)
@@ -509,7 +494,6 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
         es.addEventListener('section_failed', (e: MessageEvent) => {
           try {
             const d = JSON.parse(e.data)
-            // Insert placeholder so user knows something failed
             setSections(prev => [...prev, {
               key: d.section_key, label: d.section_label,
               content: `*This section could not be generated: ${d.error}*`
@@ -522,7 +506,6 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
       })
 
       setPhase('done'); setLoadingKey(null)
-      // Switch to first section after done
       if (sections.length > 0) setActiveKey(sections[0].key)
 
     } catch (err: unknown) {
@@ -533,7 +516,6 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
 
   const activeSection = sections.find(s => s.key === activeKey) ?? sections[0] ?? null
 
-  // ── Idle ──
   if (phase === 'idle') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
@@ -560,7 +542,6 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
     )
   }
 
-  // ── Error ──
   if (phase === 'error') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
@@ -570,15 +551,12 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
     )
   }
 
-  // ── Analyzing / Done ──
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-
-      {/* Section nav */}
       <nav className="technical-nav">
         <p style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0 16px 8px' }}>Sections</p>
         {TECHNICAL_SECTION_DEFS.map(def => {
-          const done   = sections.some(s => s.key === def.key)
+          const done    = sections.some(s => s.key === def.key)
           const loading = loadingKey === def.key
           return (
             <button key={def.key}
@@ -603,7 +581,6 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
         )}
       </nav>
 
-      {/* Content area */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
         {sections.length === 0 && phase === 'analyzing' && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '12px', color: 'var(--text-3)' }}>
@@ -612,7 +589,6 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
           </div>
         )}
 
-        {/* Show active section */}
         {activeSection && (
           <div className="technical-section-block fade-in">
             <div className="technical-section-title">
@@ -623,7 +599,6 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
           </div>
         )}
 
-        {/* Loading indicator for current section */}
         {loadingKey && phase === 'analyzing' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '16px 0', color: 'var(--text-3)', fontSize: '0.875rem' }}>
             <Spinner size="spinner-sm" />
@@ -730,7 +705,8 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+    // ── FIX: suppressHydrationWarning prevents browser-extension attribute mismatches ──
+    <div suppressHydrationWarning style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
       <div style={{ width: '100%', maxWidth: '560px' }} className="fade-in">
         <div style={{ marginBottom: '32px', textAlign: 'center' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
@@ -765,9 +741,10 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
           </div>
         )}
 
-        <div style={{ display: 'flex', background: 'var(--bg-2)', borderRadius: 'var(--radius)', padding: '3px', marginBottom: '20px', border: '1px solid var(--border)' }}>
+        {/* ── Mode toggle: suppressHydrationWarning on the container ── */}
+        <div suppressHydrationWarning style={{ display: 'flex', background: 'var(--bg-2)', borderRadius: 'var(--radius)', padding: '3px', marginBottom: '20px', border: '1px solid var(--border)' }}>
           {(['search', 'upload'] as const).map(m => (
-            <button key={m} onClick={() => { setMode(m); setError('') }}
+            <button suppressHydrationWarning key={m} onClick={() => { setMode(m); setError('') }}
               style={{ flex: 1, padding: '7px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: '0.875rem', fontWeight: 500, transition: 'all 0.15s', background: mode === m ? 'var(--bg-3)' : 'transparent', color: mode === m ? 'var(--text)' : 'var(--text-2)' }}>
               {m === 'search' ? 'Search papers' : 'Upload PDF'}
             </button>
@@ -775,10 +752,11 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
         </div>
 
         <div className="card" style={{ padding: '24px' }}>
-          <form onSubmit={mode === 'search' ? handleSearch : handleUpload}>
+          {/* ── Form: suppressHydrationWarning on all interactive elements ── */}
+          <form suppressHydrationWarning onSubmit={mode === 'search' ? handleSearch : handleUpload}>
             <div style={{ marginBottom: '16px' }}>
               <label className="label">{mode === 'search' ? 'Topic or keywords' : 'Topic label'}</label>
-              <input className={`input ${topicError ? 'error' : ''}`} value={topic} onChange={e => { setTopic(e.target.value); setError('') }} placeholder={mode === 'search' ? 'e.g. large language models, RAG' : 'e.g. transformer architecture'} maxLength={200} />
+              <input suppressHydrationWarning className={`input ${topicError ? 'error' : ''}`} value={topic} onChange={e => { setTopic(e.target.value); setError('') }} placeholder={mode === 'search' ? 'e.g. large language models, RAG' : 'e.g. transformer architecture'} maxLength={200} />
               {topicError && <p style={{ color: 'var(--error)', fontSize: '0.8125rem', marginTop: '4px' }}>{topicError}</p>}
             </div>
             {mode === 'search' && (
@@ -786,7 +764,7 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
                   <div>
                     <label className="label">Source</label>
-                    <select className="select" value={source} onChange={e => setSource(e.target.value as typeof source)}>
+                    <select suppressHydrationWarning className="select" value={source} onChange={e => setSource(e.target.value as typeof source)}>
                       <option value="both">arXiv + PubMed</option>
                       <option value="arxiv">arXiv only</option>
                       <option value="pubmed">PubMed only</option>
@@ -794,13 +772,13 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
                   </div>
                   <div>
                     <label className="label">Number of results</label>
-                    <select className="select" value={limit} onChange={e => setLimit(Number(e.target.value))}>
+                    <select suppressHydrationWarning className="select" value={limit} onChange={e => setLimit(Number(e.target.value))}>
                       {[5, 10, 20, 30, 50].map(n => <option key={n} value={n}>{n} papers</option>)}
                     </select>
                   </div>
                 </div>
                 <div style={{ marginBottom: '20px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-                  <button type="button" onClick={() => setShowRefine(o => !o)}
+                  <button suppressHydrationWarning type="button" onClick={() => setShowRefine(o => !o)}
                     style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--bg-3)', border: 'none', cursor: 'pointer', color: 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{ fontWeight: 500 }}>Refine results</span>
@@ -811,26 +789,26 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
                   {showRefine && (
                     <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                       <div><label className="label">Sort by</label>
-                        <select className="select" value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}>
+                        <select suppressHydrationWarning className="select" value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}>
                           <option value="date">Most recent</option><option value="relevance">Most relevant</option>
                         </select>
                       </div>
                       {source !== 'pubmed' && (
                         <div><label className="label">arXiv category</label>
-                          <select className="select" value={category} onChange={e => setCategory(e.target.value)}>
+                          <select suppressHydrationWarning className="select" value={category} onChange={e => setCategory(e.target.value)}>
                             {ARXIV_CATEGORIES.map((c, i) => <option key={i} value={c.value} disabled={c.disabled as boolean | undefined}>{c.label}</option>)}
                           </select>
                         </div>
                       )}
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                        <div><label className="label">From date</label><input className="input" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
-                        <div><label className="label">To date</label><input className="input" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
+                        <div><label className="label">From date</label><input suppressHydrationWarning className="input" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
+                        <div><label className="label">To date</label><input suppressHydrationWarning className="input" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
                       </div>
                       <div><label className="label">Must include keyword</label>
-                        <input className="input" value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="e.g. interpretability, fine-tuning" />
+                        <input suppressHydrationWarning className="input" value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="e.g. interpretability, fine-tuning" />
                       </div>
                       {activeFilters.length > 0 && (
-                        <button type="button" className="btn btn-ghost btn-sm"
+                        <button suppressHydrationWarning type="button" className="btn btn-ghost btn-sm"
                           onClick={() => { setSortBy('date'); setCategory(''); setDateFrom(''); setDateTo(''); setKeyword('') }}>
                           Clear filters
                         </button>
@@ -853,7 +831,7 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
               </div>
             )}
             {error && <div className="notice notice-error" style={{ marginBottom: '16px' }}>{error}</div>}
-            <button type="submit" className="btn btn-primary btn-full btn-lg" disabled={loading}>
+            <button suppressHydrationWarning type="submit" className="btn btn-primary btn-full btn-lg" disabled={loading}>
               {loading ? <><Spinner />{mode === 'search' ? 'Searching…' : 'Uploading…'}</> : <>{mode === 'search' ? <IconSearch /> : <IconUpload />}{mode === 'search' ? 'Search papers' : 'Upload & process'}</>}
             </button>
           </form>
@@ -870,7 +848,7 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
 function PaperSelectionCard({ paper, selected, onToggle }: {
   paper: PaperPreview; selected: boolean; onToggle: () => void
 }) {
-  const [summary, setSummary]           = useState<string | null>(null)
+  const [summary, setSummary]               = useState<string | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [showFullAbstract, setShowFullAbstract] = useState(false)
   const srcStyle = SOURCE_COLORS[paper.source] ?? SOURCE_COLORS.local
@@ -1140,10 +1118,10 @@ function GenerationPanel({ paperId }: { paperId: string }) {
             ))}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-            <div><label className="label">Style</label><input className="input" value={style} onChange={e => setStyle(e.target.value)} placeholder="e.g. educational" /></div>
-            <div><label className="label">Tone</label><input className="input" value={tone} onChange={e => setTone(e.target.value)} placeholder="e.g. conversational" /></div>
+            <div><label className="label">Style</label><input suppressHydrationWarning className="input" value={style} onChange={e => setStyle(e.target.value)} placeholder="e.g. educational" /></div>
+            <div><label className="label">Tone</label><input suppressHydrationWarning className="input" value={tone} onChange={e => setTone(e.target.value)} placeholder="e.g. conversational" /></div>
           </div>
-          {platform === 'carousel' && <div style={{ marginBottom: '10px' }}><label className="label">Color scheme</label><select className="select" value={colorScheme} onChange={e => setColorScheme(e.target.value)}><option value="light">Light</option><option value="dark">Dark</option><option value="bold">Bold</option></select></div>}
+          {platform === 'carousel' && <div style={{ marginBottom: '10px' }}><label className="label">Color scheme</label><select suppressHydrationWarning className="select" value={colorScheme} onChange={e => setColorScheme(e.target.value)}><option value="light">Light</option><option value="dark">Dark</option><option value="bold">Bold</option></select></div>}
           {error && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{error}</div>}
           <button className="btn btn-primary btn-full" onClick={handleGenerate} disabled={loading} style={{ marginBottom: '12px' }}>{loading ? <><Spinner />Generating…</> : 'Generate'}</button>
           {result && (
@@ -1400,8 +1378,6 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-
-            {/* Chat mode selector */}
             <div style={{ display: 'flex', background: 'var(--bg-3)', borderRadius: 'var(--radius)', padding: '3px', border: '1px solid var(--border)', gap: '2px' }}>
               {CHAT_MODES.map(m => {
                 const isActive = chatMode === m.id
@@ -1415,7 +1391,6 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
               })}
             </div>
 
-            {/* Level selector — ONLY shown in standard/chat mode */}
             {chatMode === 'standard' && (
               <div style={{ display: 'flex', gap: '4px' }}>
                 {(['beginner', 'intermediate', 'advanced'] as Level[]).map(l => (
@@ -1436,11 +1411,8 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
 
         {/* Body */}
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-
-          {/* Main content area — switches based on mode */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
 
-            {/* Mode context banner */}
             {activeSession && chatMode !== 'standard' && (
               <div style={{ padding: '8px 20px', background: `${activeModeConfig.color}11`, borderBottom: `1px solid ${activeModeConfig.color}33`, display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: activeModeConfig.color, flexShrink: 0 }} />
@@ -1449,21 +1421,18 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
               </div>
             )}
 
-            {/* Study mode — full panel */}
             {chatMode === 'study' && activePaper && (
               <div style={{ flex: 1, overflowY: 'auto' }}>
                 <StudyPanel paperId={activePaper.paper_id} />
               </div>
             )}
 
-            {/* Technical mode — full panel */}
             {chatMode === 'technical' && activePaper && (
               <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 <TechnicalPanel paperId={activePaper.paper_id} />
               </div>
             )}
 
-            {/* Standard chat mode */}
             {chatMode === 'standard' && (
               <>
                 <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
@@ -1502,11 +1471,11 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
                 {/* Chat input */}
                 <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--bg-2)', flexShrink: 0 }}>
                   {chatError && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{chatError}</div>}
-                  <form onSubmit={handleSend} style={{ display: 'flex', gap: '8px' }}>
-                    <input className="input" value={input} onChange={e => setInput(e.target.value)}
+                  <form suppressHydrationWarning onSubmit={handleSend} style={{ display: 'flex', gap: '8px' }}>
+                    <input suppressHydrationWarning className="input" value={input} onChange={e => setInput(e.target.value)}
                       placeholder={!activeSession ? 'Waiting for a session…' : 'Ask anything about this paper…'}
                       disabled={!activeSession || sending} maxLength={2000} style={{ flex: 1 }} />
-                    <button type="submit" className="btn btn-primary"
+                    <button suppressHydrationWarning type="submit" className="btn btn-primary"
                       disabled={!activeSession || !input.trim() || sending} style={{ flexShrink: 0 }}>
                       <IconSend />
                     </button>
@@ -1515,7 +1484,6 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
               </>
             )}
 
-            {/* No paper selected in study/technical */}
             {(chatMode === 'study' || chatMode === 'technical') && !activePaper && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
                 <p style={{ color: 'var(--text-3)', textAlign: 'center', fontSize: '0.9375rem' }}>
@@ -1525,7 +1493,6 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
             )}
           </div>
 
-          {/* Generate panel */}
           {generateOpen && (
             <div className="fade-in" style={{ width: '300px', flexShrink: 0, borderLeft: '1px solid var(--border)', overflowY: 'auto', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
               {paperIsReady
@@ -1562,12 +1529,15 @@ export default function App() {
     setView('processing')
   }
 
+  // suppressHydrationWarning on the fragment wrapper prevents extension-injected
+  // attributes (e.g. fdprocessedid from password managers) from causing React
+  // hydration mismatches across the entire app tree.
   return (
-    <>
+    <div suppressHydrationWarning>
       {view === 'search'     && <SearchView onResults={handleSearchResults} />}
       {view === 'selection'  && <SelectionView papers={searchResults} onSelect={handleSelection} onBack={() => setView('search')} />}
       {view === 'processing' && <ProcessingView papers={papers} onDone={p => { setPapers(p); setView('chat') }} />}
       {view === 'chat'       && <ChatView initialPapers={papers} onNewSearch={() => { setSearchResults([]); setView('search') }} />}
-    </>
+    </div>
   )
 }
