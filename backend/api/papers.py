@@ -68,7 +68,7 @@ class ProcessRequest(BaseModel):
 # Only the has_pdf → has_full_text rename and its value logic changed.
 # Everything else is identical to the original.
 
-def _doc_to_preview(doc: DocumentInput) -> dict:
+def _doc_to_preview(doc: DocumentInput) -> dict: 
     return {
         "paper_id":      doc.paper_id,
         "source":        doc.source,
@@ -259,6 +259,7 @@ async def _run_pipeline(doc: DocumentInput) -> None:
                 paper_id,
                 doc.topic or doc.title or paper_id,
                 "beginner",
+                mode="standard",
             )
             logger.info("Pipeline complete (abstract-only): %s", paper_id)
             return
@@ -307,6 +308,7 @@ async def _run_pipeline(doc: DocumentInput) -> None:
             paper_id,
             doc.topic or doc.title or paper_id,
             "beginner",
+            mode="standard",
         )
 
         await push_paper_event(paper_id, "done", {
