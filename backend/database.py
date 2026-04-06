@@ -27,7 +27,7 @@ class Paper(Base):
     __tablename__ = "papers"
 
     paper_id:       Mapped[str]           = mapped_column(String, primary_key=True)
-    source:         Mapped[str]           = mapped_column(String)           # arxiv | pubmed | local
+    source:         Mapped[str]           = mapped_column(String)
     title:          Mapped[str | None]    = mapped_column(Text)
     abstract:       Mapped[str | None]    = mapped_column(Text)
     authors:        Mapped[list | None]   = mapped_column(JSON)
@@ -59,7 +59,8 @@ class ChatSession(Base):
     session_id:     Mapped[str]           = mapped_column(String, primary_key=True)
     paper_id:       Mapped[str]           = mapped_column(ForeignKey("papers.paper_id", ondelete="CASCADE"))
     topic:          Mapped[str | None]    = mapped_column(Text)
-    level:          Mapped[str | None]    = mapped_column(String)           # beginner | intermediate | advanced
+    level:          Mapped[str | None]    = mapped_column(String)
+    mode:           Mapped[str]           = mapped_column(String, default="standard")  # standard | study | technical
     title:          Mapped[str | None]    = mapped_column(Text)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at:     Mapped[datetime]      = mapped_column(
@@ -77,7 +78,7 @@ class ChatMessage(Base):
 
     id:         Mapped[int]        = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[str]        = mapped_column(ForeignKey("chat_sessions.session_id", ondelete="CASCADE"))
-    role:       Mapped[str]        = mapped_column(String)                  # user | assistant
+    role:       Mapped[str]        = mapped_column(String)
     content:    Mapped[str]        = mapped_column(Text)
     level:      Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime]   = mapped_column(
@@ -92,7 +93,7 @@ class SocialContent(Base):
 
     id:           Mapped[int]           = mapped_column(Integer, primary_key=True, autoincrement=True)
     paper_id:     Mapped[str]           = mapped_column(ForeignKey("papers.paper_id", ondelete="CASCADE"))
-    platform:     Mapped[str]           = mapped_column(String)             # twitter | linkedin | carousel
+    platform:     Mapped[str]           = mapped_column(String)
     content_type: Mapped[str | None]    = mapped_column(String)
     content:      Mapped[str]           = mapped_column(Text)
     hashtags:     Mapped[list | None]   = mapped_column(JSON)
@@ -109,7 +110,7 @@ class ProcessingLog(Base):
     id:               Mapped[int]        = mapped_column(Integer, primary_key=True, autoincrement=True)
     paper_id:         Mapped[str]        = mapped_column(ForeignKey("papers.paper_id", ondelete="CASCADE"))
     stage:            Mapped[str]        = mapped_column(String)
-    status:           Mapped[str]        = mapped_column(String)            # completed | failed
+    status:           Mapped[str]        = mapped_column(String)
     message:          Mapped[str | None] = mapped_column(Text)
     duration_seconds: Mapped[float | None] = mapped_column(Float)
     created_at:       Mapped[datetime]   = mapped_column(
@@ -130,14 +131,11 @@ class Database:
         """Create the async engine and all tables."""
         from sqlalchemy import event
 
-        # Dispose any existing engine before creating a new one (safe double-init)
         if self._engine is not None:
             await self._engine.dispose()
 
         self._engine = create_async_engine(cfg.DATABASE_URL, echo=False)
 
-        # SQLite does not enforce FK constraints by default.
-        # Enable them for every connection so cascade deletes work correctly.
         @event.listens_for(self._engine.sync_engine, "connect")
         def _set_sqlite_pragma(dbapi_conn, _conn_record):
             cursor = dbapi_conn.cursor()
@@ -150,17 +148,34 @@ class Database:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
+        # Migration-safe: add mode column to existing databases that predate it
+        await self._migrate_add_mode_column()
+
+    async def _migrate_add_mode_column(self) -> None:
+        """
+        Add the mode column to chat_sessions if it does not exist.
+        SQLite does not support IF NOT EXISTS on ALTER TABLE, so we
+        check the column list first.
+        """
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                # SQLite PRAGMA returns one row per column
+                __import__("sqlalchemy").text("PRAGMA table_info(chat_sessions)")
+            )
+            columns = [row[1] for row in result.fetchall()]
+            if "mode" not in columns:
+                await conn.execute(
+                    __import__("sqlalchemy").text(
+                        "ALTER TABLE chat_sessions ADD COLUMN mode VARCHAR DEFAULT 'standard'"
+                    )
+                )
+
     async def close(self):
-        """Dispose the engine cleanly."""
         if self._engine:
             await self._engine.dispose()
 
     @asynccontextmanager
     async def session(self) -> AsyncGenerator[AsyncSession, None]:
-        """
-        Async context manager that yields an AsyncSession.
-        Auto-commits on clean exit; rolls back on exception.
-        """
         async with self._session_maker() as sess:
             try:
                 yield sess
@@ -172,7 +187,6 @@ class Database:
     # ── Paper helpers ─────────────────────────────────────────────────────────
 
     async def upsert_paper(self, sess: AsyncSession, data: dict[str, Any]) -> Paper:
-        """Insert paper if new; update all supplied fields if it already exists."""
         paper = await self.get_paper(sess, data["paper_id"])
         if paper is None:
             paper = Paper(**data)
@@ -210,12 +224,6 @@ class Database:
         stage:    str,
         error:    str | None = None,
     ) -> None:
-        """
-        Update pipeline_stage, optionally record an error, and manage processed_at:
-          - Set processed_at to now when stage is 'processed'.
-          - Clear processed_at for all other stages so re-queued or failed papers
-            never show a stale completion timestamp.
-        """
         values: dict[str, Any] = {"pipeline_stage": stage, "error_message": error}
         if stage == "processed":
             values["processed_at"] = datetime.now(timezone.utc)
@@ -228,7 +236,6 @@ class Database:
     async def update_chunk_count(
         self, sess: AsyncSession, paper_id: str, count: int
     ) -> None:
-        """Record the number of chunks produced for a paper after embedding."""
         await sess.execute(
             update(Paper)
             .where(Paper.paper_id == paper_id)
@@ -236,7 +243,6 @@ class Database:
         )
 
     async def delete_paper(self, sess: AsyncSession, paper_id: str) -> bool:
-        """Delete paper and all related rows (cascade). Returns True if it existed."""
         result = await sess.execute(
             delete(Paper).where(Paper.paper_id == paper_id)
         )
@@ -251,18 +257,20 @@ class Database:
         paper_id:   str,
         topic:      str,
         level:      str,
-    ) -> ChatSession:
+        mode:       str = "standard",
+    ) -> "ChatSession":
         chat_session = ChatSession(
             session_id=session_id,
             paper_id=paper_id,
             topic=topic,
             level=level,
+            mode=mode,
             last_active_at=datetime.now(timezone.utc),
         )
         sess.add(chat_session)
         return chat_session
 
-    async def get_session(self, sess: AsyncSession, session_id: str) -> ChatSession | None:
+    async def get_session(self, sess: AsyncSession, session_id: str) -> "ChatSession | None":
         result = await sess.execute(
             select(ChatSession).where(ChatSession.session_id == session_id)
         )
@@ -273,7 +281,7 @@ class Database:
         sess:     AsyncSession,
         paper_id: str | None = None,
         limit:    int = 50,
-    ) -> list[ChatSession]:
+    ) -> list["ChatSession"]:
         query = select(ChatSession)
         if paper_id:
             query = query.where(ChatSession.paper_id == paper_id)
@@ -288,13 +296,12 @@ class Database:
         role:       str,
         content:    str,
         level:      str,
-    ) -> ChatMessage:
+    ) -> "ChatMessage":
         session = await self.get_session(sess, session_id)
         if session is None:
             raise ValueError(f"ChatSession {session_id!r} does not exist.")
         msg = ChatMessage(session_id=session_id, role=role, content=content, level=level)
         sess.add(msg)
-        # Keep last_active_at current on the parent session
         await sess.execute(
             update(ChatSession)
             .where(ChatSession.session_id == session_id)
@@ -302,7 +309,7 @@ class Database:
         )
         return msg
 
-    async def get_messages(self, sess: AsyncSession, session_id: str) -> list[ChatMessage]:
+    async def get_messages(self, sess: AsyncSession, session_id: str) -> list["ChatMessage"]:
         result = await sess.execute(
             select(ChatMessage)
             .where(ChatMessage.session_id == session_id)
@@ -319,6 +326,15 @@ class Database:
             .values(level=level)
         )
 
+    async def update_session_mode(
+        self, sess: AsyncSession, session_id: str, mode: str
+    ) -> None:
+        await sess.execute(
+            update(ChatSession)
+            .where(ChatSession.session_id == session_id)
+            .values(mode=mode)
+        )
+
     # ── Social content helpers ────────────────────────────────────────────────
 
     async def save_social(
@@ -329,7 +345,7 @@ class Database:
         content_type: str,
         content:      str,
         hashtags:     list[str],
-    ) -> SocialContent:
+    ) -> "SocialContent":
         item = SocialContent(
             paper_id=paper_id,
             platform=platform,
@@ -345,7 +361,7 @@ class Database:
         sess:     AsyncSession,
         paper_id: str,
         platform: str | None = None,
-    ) -> list[SocialContent]:
+    ) -> list["SocialContent"]:
         query = select(SocialContent).where(SocialContent.paper_id == paper_id)
         if platform:
             query = query.where(SocialContent.platform == platform)
@@ -355,8 +371,7 @@ class Database:
 
     async def get_social_by_id(
         self, sess: AsyncSession, content_id: int
-    ) -> SocialContent | None:
-        """Retrieve a single SocialContent row by its integer primary key."""
+    ) -> "SocialContent | None":
         result = await sess.execute(
             select(SocialContent).where(SocialContent.id == content_id)
         )
@@ -372,7 +387,7 @@ class Database:
         status:   str,
         message:  str,
         duration: float,
-    ) -> ProcessingLog:
+    ) -> "ProcessingLog":
         entry = ProcessingLog(
             paper_id=paper_id,
             stage=stage,
@@ -385,8 +400,7 @@ class Database:
 
     async def get_logs(
         self, sess: AsyncSession, paper_id: str
-    ) -> list[ProcessingLog]:
-        """Retrieve all ProcessingLog rows for a paper in chronological order."""
+    ) -> list["ProcessingLog"]:
         result = await sess.execute(
             select(ProcessingLog)
             .where(ProcessingLog.paper_id == paper_id)
