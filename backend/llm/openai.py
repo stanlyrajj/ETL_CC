@@ -9,6 +9,7 @@ from openai import OpenAI
 
 from config import cfg
 from llm.base import LLMProvider, parse_json_response, sanitize_context
+from llm.rate_limiter import llm_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ Paper title: {title}
 Cover:
 - All key technical concepts, algorithms, and data structures used
 - Definitions and explanations of domain-specific terminology
-- Mathematical or algorithmic foundations where relevant (use LaTeX notation in code blocks if needed)
+- Mathematical or algorithmic foundations where relevant
 
 Use markdown with **bold** for key terms, bullet points for concept lists. Be thorough.""",
 
@@ -184,7 +185,7 @@ Paper title: {title}
 Cover:
 - Computational complexity and resource requirements
 - Known limitations and failure modes
-- Engineering trade-offs (speed vs accuracy, memory vs throughput, etc.)
+- Engineering trade-offs
 - Practical considerations for production deployment
 - Open problems or areas for improvement
 
@@ -210,9 +211,18 @@ class OpenAIProvider(LLMProvider):
         return response.choices[0].message.content or ""
 
     async def _with_retry(self, messages: list[dict], max_tokens: int = 2048) -> str:
+        """
+        Acquire a rate-limit token, then run the blocking call in executor
+        with exponential backoff retry.
+
+        Rate limiter runs BEFORE the first attempt and before each retry
+        so bursts of calls (e.g. Technical analysis, 5 sections) are
+        spaced correctly and don't cascade into provider-side 429s.
+        """
         loop     = asyncio.get_running_loop()
         last_exc = None
         for attempt in range(1, cfg.MAX_RETRIES + 1):
+            await llm_rate_limiter.acquire()
             try:
                 return await loop.run_in_executor(
                     None, lambda: self._call_sync(messages, max_tokens)
@@ -222,12 +232,18 @@ class OpenAIProvider(LLMProvider):
                 if attempt < cfg.MAX_RETRIES:
                     error_str = str(exc)
                     wait = 60 if "429" in error_str else 2 ** attempt
-                    logger.warning("OpenAI attempt %d/%d failed: %s — retrying in %ds",
-                                   attempt, cfg.MAX_RETRIES, exc, wait)
+                    logger.warning(
+                        "OpenAI attempt %d/%d failed: %s — retrying in %ds",
+                        attempt, cfg.MAX_RETRIES, exc, wait,
+                    )
                     await asyncio.sleep(wait)
-        raise RuntimeError(f"OpenAI call failed after {cfg.MAX_RETRIES} attempts: {last_exc}") from last_exc
+        raise RuntimeError(
+            f"OpenAI call failed after {cfg.MAX_RETRIES} attempts: {last_exc}"
+        ) from last_exc
 
-    def _build_messages(self, system: str, user_prompt: str, history: list[dict] | None = None) -> list[dict]:
+    def _build_messages(
+        self, system: str, user_prompt: str, history: list[dict] | None = None
+    ) -> list[dict]:
         messages = [{"role": "system", "content": system}]
         if history:
             messages.extend(history)
@@ -236,12 +252,16 @@ class OpenAIProvider(LLMProvider):
 
     # ── Chat ──────────────────────────────────────────────────────────────────
 
-    async def chat_response(self, context, title, authors, history, message, level, mode="standard") -> str:
+    async def chat_response(
+        self, context, title, authors, history, message, level, mode="standard"
+    ) -> str:
         safe_context  = sanitize_context(context)
         system_prompt = self.get_system_prompt(mode)
         system        = system_prompt + "\n\n" + _CHAT_PROMPT.format(
-            title=title, authors=", ".join(authors) if authors else "Unknown",
-            context=safe_context, level=level,
+            title=title,
+            authors=", ".join(authors) if authors else "Unknown",
+            context=safe_context,
+            level=level,
         )
         messages = [{"role": "system", "content": system}]
         if history:
@@ -253,20 +273,28 @@ class OpenAIProvider(LLMProvider):
 
     async def generate_twitter_thread(self, context, title, style, tone) -> dict:
         safe_context = sanitize_context(context)
-        prompt = _TWITTER_PROMPT.format(title=title, style=style, tone=tone, context=safe_context)
+        prompt = _TWITTER_PROMPT.format(
+            title=title, style=style, tone=tone, context=safe_context
+        )
         raw = await self._with_retry(self._build_messages(self.SYSTEM_PROMPT, prompt))
         return parse_json_response(raw)
 
     async def generate_linkedin_post(self, context, title, style, tone) -> dict:
         safe_context = sanitize_context(context)
-        prompt = _LINKEDIN_PROMPT.format(title=title, style=style, tone=tone, context=safe_context)
+        prompt = _LINKEDIN_PROMPT.format(
+            title=title, style=style, tone=tone, context=safe_context
+        )
         raw = await self._with_retry(self._build_messages(self.SYSTEM_PROMPT, prompt))
         return parse_json_response(raw)
 
-    async def generate_carousel_content(self, context, title, style, tone, color_scheme) -> dict:
+    async def generate_carousel_content(
+        self, context, title, style, tone, color_scheme
+    ) -> dict:
         safe_context = sanitize_context(context)
-        prompt = _CAROUSEL_PROMPT.format(title=title, style=style, tone=tone,
-                                         color_scheme=color_scheme, context=safe_context)
+        prompt = _CAROUSEL_PROMPT.format(
+            title=title, style=style, tone=tone,
+            color_scheme=color_scheme, context=safe_context,
+        )
         raw = await self._with_retry(self._build_messages(self.SYSTEM_PROMPT, prompt))
         return parse_json_response(raw)
 
@@ -280,7 +308,9 @@ class OpenAIProvider(LLMProvider):
         )
         return parse_json_response(raw)
 
-    async def generate_study_section(self, context, title, section_title, section_description) -> str:
+    async def generate_study_section(
+        self, context, title, section_title, section_description
+    ) -> str:
         safe_context = sanitize_context(context)
         prompt = _STUDY_SECTION_PROMPT.format(
             title=title, section_title=section_title,

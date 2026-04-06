@@ -9,6 +9,7 @@ import anthropic
 
 from config import cfg
 from llm.base import LLMProvider, parse_json_response, sanitize_context
+from llm.rate_limiter import llm_rate_limiter
 from llm.openai import (
     _CHAT_PROMPT, _TWITTER_PROMPT, _LINKEDIN_PROMPT, _CAROUSEL_PROMPT,
     _STUDY_OUTLINE_PROMPT, _STUDY_SECTION_PROMPT, _FLASHCARD_PROMPT,
@@ -32,10 +33,13 @@ class AnthropicProvider(LLMProvider):
         )
         return response.content[0].text if response.content else ""
 
-    async def _with_retry(self, system: str, messages: list[dict], max_tokens: int = 2048) -> str:
+    async def _with_retry(
+        self, system: str, messages: list[dict], max_tokens: int = 2048
+    ) -> str:
         loop     = asyncio.get_running_loop()
         last_exc = None
         for attempt in range(1, cfg.MAX_RETRIES + 1):
+            await llm_rate_limiter.acquire()
             try:
                 return await loop.run_in_executor(
                     None, lambda: self._call_sync(system, messages, max_tokens)
@@ -44,19 +48,27 @@ class AnthropicProvider(LLMProvider):
                 last_exc = exc
                 if attempt < cfg.MAX_RETRIES:
                     wait = 2 ** attempt
-                    logger.warning("Anthropic attempt %d/%d failed: %s — retrying in %ds",
-                                   attempt, cfg.MAX_RETRIES, exc, wait)
+                    logger.warning(
+                        "Anthropic attempt %d/%d failed: %s — retrying in %ds",
+                        attempt, cfg.MAX_RETRIES, exc, wait,
+                    )
                     await asyncio.sleep(wait)
-        raise RuntimeError(f"Anthropic call failed after {cfg.MAX_RETRIES} attempts: {last_exc}") from last_exc
+        raise RuntimeError(
+            f"Anthropic call failed after {cfg.MAX_RETRIES} attempts: {last_exc}"
+        ) from last_exc
 
     # ── Chat ──────────────────────────────────────────────────────────────────
 
-    async def chat_response(self, context, title, authors, history, message, level, mode="standard") -> str:
+    async def chat_response(
+        self, context, title, authors, history, message, level, mode="standard"
+    ) -> str:
         safe_context  = sanitize_context(context)
         system_prompt = self.get_system_prompt(mode)
         system        = system_prompt + "\n\n" + _CHAT_PROMPT.format(
-            title=title, authors=", ".join(authors) if authors else "Unknown",
-            context=safe_context, level=level,
+            title=title,
+            authors=", ".join(authors) if authors else "Unknown",
+            context=safe_context,
+            level=level,
         )
         messages = list(history) if history else []
         messages.append({"role": "user", "content": message})
@@ -66,21 +78,35 @@ class AnthropicProvider(LLMProvider):
 
     async def generate_twitter_thread(self, context, title, style, tone) -> dict:
         safe_context = sanitize_context(context)
-        prompt = _TWITTER_PROMPT.format(title=title, style=style, tone=tone, context=safe_context)
-        raw = await self._with_retry(self.SYSTEM_PROMPT, [{"role": "user", "content": prompt}])
+        prompt = _TWITTER_PROMPT.format(
+            title=title, style=style, tone=tone, context=safe_context
+        )
+        raw = await self._with_retry(
+            self.SYSTEM_PROMPT, [{"role": "user", "content": prompt}]
+        )
         return parse_json_response(raw)
 
     async def generate_linkedin_post(self, context, title, style, tone) -> dict:
         safe_context = sanitize_context(context)
-        prompt = _LINKEDIN_PROMPT.format(title=title, style=style, tone=tone, context=safe_context)
-        raw = await self._with_retry(self.SYSTEM_PROMPT, [{"role": "user", "content": prompt}])
+        prompt = _LINKEDIN_PROMPT.format(
+            title=title, style=style, tone=tone, context=safe_context
+        )
+        raw = await self._with_retry(
+            self.SYSTEM_PROMPT, [{"role": "user", "content": prompt}]
+        )
         return parse_json_response(raw)
 
-    async def generate_carousel_content(self, context, title, style, tone, color_scheme) -> dict:
+    async def generate_carousel_content(
+        self, context, title, style, tone, color_scheme
+    ) -> dict:
         safe_context = sanitize_context(context)
-        prompt = _CAROUSEL_PROMPT.format(title=title, style=style, tone=tone,
-                                         color_scheme=color_scheme, context=safe_context)
-        raw = await self._with_retry(self.SYSTEM_PROMPT, [{"role": "user", "content": prompt}])
+        prompt = _CAROUSEL_PROMPT.format(
+            title=title, style=style, tone=tone,
+            color_scheme=color_scheme, context=safe_context,
+        )
+        raw = await self._with_retry(
+            self.SYSTEM_PROMPT, [{"role": "user", "content": prompt}]
+        )
         return parse_json_response(raw)
 
     # ── Study ─────────────────────────────────────────────────────────────────
@@ -89,25 +115,30 @@ class AnthropicProvider(LLMProvider):
         safe_context = sanitize_context(context)
         prompt = _STUDY_OUTLINE_PROMPT.format(title=title, context=safe_context)
         raw = await self._with_retry(
-            self.STUDY_SYSTEM_PROMPT, [{"role": "user", "content": prompt}], max_tokens=1024
+            self.STUDY_SYSTEM_PROMPT, [{"role": "user", "content": prompt}],
+            max_tokens=1024,
         )
         return parse_json_response(raw)
 
-    async def generate_study_section(self, context, title, section_title, section_description) -> str:
+    async def generate_study_section(
+        self, context, title, section_title, section_description
+    ) -> str:
         safe_context = sanitize_context(context)
         prompt = _STUDY_SECTION_PROMPT.format(
             title=title, section_title=section_title,
             section_description=section_description, context=safe_context,
         )
         return await self._with_retry(
-            self.STUDY_SYSTEM_PROMPT, [{"role": "user", "content": prompt}], max_tokens=2048
+            self.STUDY_SYSTEM_PROMPT, [{"role": "user", "content": prompt}],
+            max_tokens=2048,
         )
 
     async def generate_flashcards(self, context, title) -> dict:
         safe_context = sanitize_context(context)
         prompt = _FLASHCARD_PROMPT.format(title=title, context=safe_context)
         raw = await self._with_retry(
-            self.STUDY_SYSTEM_PROMPT, [{"role": "user", "content": prompt}], max_tokens=1500
+            self.STUDY_SYSTEM_PROMPT, [{"role": "user", "content": prompt}],
+            max_tokens=1500,
         )
         return parse_json_response(raw)
 
@@ -123,5 +154,6 @@ class AnthropicProvider(LLMProvider):
             prev_sections=prev_sections if prev_sections else "",
         )
         return await self._with_retry(
-            self.TECHNICAL_SYSTEM_PROMPT, [{"role": "user", "content": prompt}], max_tokens=2048
+            self.TECHNICAL_SYSTEM_PROMPT, [{"role": "user", "content": prompt}],
+            max_tokens=2048,
         )
