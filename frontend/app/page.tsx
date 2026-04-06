@@ -1,28 +1,53 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
 import {
-  searchPapers, processPapers, uploadPaper, listSessions, getSession, listPapers,
-  sendMessage, updateLevel, generateContent, generationHistory, deleteSession,
-  exportCarousel, getShareLinks, getModels, selectModel,
+  searchPapers, processPapers, uploadPaper, listSessions, getSession,
+  createSession, listPapers, sendMessage, updateLevel, generateContent,
+  generationHistory, deleteSession, exportCarousel, getShareLinks,
+  getModels, selectModel,
   type Paper, type PaperPreview, type Session, type SessionDetail,
-  type Message, type SocialItem, type ModelOption,
+  type Message, type SocialItem, type ModelOption, type ChatMode,
 } from './lib/api'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type View = 'search' | 'selection' | 'processing' | 'chat'
-type Level = 'beginner' | 'intermediate' | 'advanced'
+type View     = 'search' | 'selection' | 'processing' | 'chat'
+type Level    = 'beginner' | 'intermediate' | 'advanced'
 type Platform = 'twitter' | 'linkedin' | 'carousel'
 
 interface PaperStatus extends Paper {
-  sseStage?: string
+  sseStage?:   string
   sseMessage?: string
 }
 
 const BACKEND = 'http://localhost:8000'
 
-// ── arXiv category options ────────────────────────────────────────────────────
+// ── Chat mode config ──────────────────────────────────────────────────────────
+
+const CHAT_MODES: { id: ChatMode; label: string; description: string; color: string }[] = [
+  {
+    id:          'standard',
+    label:       'Chat',
+    description: 'Ask anything about this paper',
+    color:       'var(--accent)',
+  },
+  {
+    id:          'study',
+    label:       'Study',
+    description: 'Flashcards, questions & examples',
+    color:       '#60a5fa',
+  },
+  {
+    id:          'technical',
+    label:       'Technical',
+    description: 'System design & implementation',
+    color:       '#c084fc',
+  },
+]
+
+// ── arXiv categories ──────────────────────────────────────────────────────────
 const ARXIV_CATEGORIES = [
   { label: 'All Categories',                    value: '' },
   { label: '── Computer Science ──',            value: '', disabled: true },
@@ -63,9 +88,9 @@ function stageLabel(stage: string): string {
 }
 
 function stageClass(stage: string): string {
-  if (stage === 'processed') return 'badge-done'
+  if (stage === 'processed')      return 'badge-done'
   if (stage.startsWith('failed')) return 'badge-error'
-  if (stage === 'pending') return 'badge-pending'
+  if (stage === 'pending')        return 'badge-pending'
   return 'badge-active'
 }
 
@@ -79,13 +104,9 @@ function truncateAbstract(text: string, sentences = 2): string {
   return parts.slice(0, sentences).join(' ').trim() || text.slice(0, 200)
 }
 
-/**
- * Returns a human-readable relative time string from an ISO timestamp.
- * e.g. "just now", "5 min ago", "2 hours ago", "Yesterday", "3 days ago"
- */
 function relativeTime(iso: string | null): string {
   if (!iso) return ''
-  const diff = Date.now() - new Date(iso).getTime()
+  const diff  = Date.now() - new Date(iso).getTime()
   const mins  = Math.floor(diff / 60000)
   const hours = Math.floor(diff / 3600000)
   const days  = Math.floor(diff / 86400000)
@@ -97,18 +118,12 @@ function relativeTime(iso: string | null): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-/**
- * Groups sessions into date buckets for sidebar display.
- */
 type SessionGroup = { label: string; sessions: Session[] }
 
 function groupSessions(sessions: Session[]): SessionGroup[] {
-  const now   = Date.now()
-  const today: Session[]     = []
-  const yesterday: Session[] = []
-  const week: Session[]      = []
-  const older: Session[]     = []
-
+  const now = Date.now()
+  const today: Session[] = [], yesterday: Session[] = [],
+        week: Session[]  = [], older: Session[]     = []
   for (const s of sessions) {
     const diff = now - new Date(s.last_active_at ?? s.created_at ?? 0).getTime()
     const days = diff / 86400000
@@ -117,7 +132,6 @@ function groupSessions(sessions: Session[]): SessionGroup[] {
     else if (days < 7) week.push(s)
     else               older.push(s)
   }
-
   const groups: SessionGroup[] = []
   if (today.length)     groups.push({ label: 'Today',     sessions: today })
   if (yesterday.length) groups.push({ label: 'Yesterday', sessions: yesterday })
@@ -132,6 +146,12 @@ const SOURCE_COLORS: Record<string, { bg: string; color: string; label: string }
   local:  { bg: 'rgba(16,185,129,0.15)',  color: 'var(--accent)', label: 'Local' },
 }
 
+const MODE_COLORS: Record<ChatMode, string> = {
+  standard:  'var(--accent)',
+  study:     '#60a5fa',
+  technical: '#c084fc',
+}
+
 // ── Spinner ───────────────────────────────────────────────────────────────────
 
 function Spinner({ size = '' }: { size?: string }) {
@@ -141,70 +161,35 @@ function Spinner({ size = '' }: { size?: string }) {
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
 function IconSearch() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-    </svg>
-  )
+  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
 }
 function IconUpload() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-    </svg>
-  )
+  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
 }
 function IconSend() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-    </svg>
-  )
+  return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
 }
 function IconShare() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>
-    </svg>
-  )
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
 }
 function IconDownload() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-    </svg>
-  )
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
 }
 function IconChevron({ open }: { open: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      style={{ transition: 'transform 0.2s', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}>
-      <polyline points="6 9 12 15 18 9"/>
-    </svg>
-  )
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'transform 0.2s', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}><polyline points="6 9 12 15 18 9"/></svg>
 }
 function IconSparkle() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/>
-    </svg>
-  )
+  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/></svg>
 }
 function IconTrash() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
-    </svg>
-  )
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VIEW 1: Search / Upload
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SearchView({ onResults }: {
-  onResults: (papers: PaperPreview[]) => void
-}) {
+function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void }) {
   const [topic, setTopic]     = useState('')
   const [source, setSource]   = useState<'both' | 'arxiv' | 'pubmed'>('both')
   const [limit, setLimit]     = useState(10)
@@ -300,7 +285,6 @@ function SearchView({ onResults }: {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
       <div style={{ width: '100%', maxWidth: '560px' }} className="fade-in">
-
         <div style={{ marginBottom: '32px', textAlign: 'center' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent)', display: 'inline-block' }} />
@@ -369,7 +353,6 @@ function SearchView({ onResults }: {
                     </select>
                   </div>
                 </div>
-
                 <div style={{ marginBottom: '20px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
                   <button type="button" onClick={() => setShowRefine(o => !o)}
                     style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--bg-3)', border: 'none', cursor: 'pointer', color: 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem' }}>
@@ -401,14 +384,8 @@ function SearchView({ onResults }: {
                         </div>
                       )}
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                        <div>
-                          <label className="label">From date</label>
-                          <input className="input" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-                        </div>
-                        <div>
-                          <label className="label">To date</label>
-                          <input className="input" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
-                        </div>
+                        <div><label className="label">From date</label><input className="input" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
+                        <div><label className="label">To date</label><input className="input" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
                       </div>
                       <div>
                         <label className="label">Must include keyword</label>
@@ -440,7 +417,6 @@ function SearchView({ onResults }: {
             )}
 
             {error && <div className="notice notice-error" style={{ marginBottom: '16px' }}>{error}</div>}
-
             <button type="submit" className="btn btn-primary btn-full btn-lg" disabled={loading}>
               {loading ? <><Spinner />{mode === 'search' ? 'Searching…' : 'Uploading…'}</> : <>{mode === 'search' ? <IconSearch /> : <IconUpload />}{mode === 'search' ? 'Search papers' : 'Upload & process'}</>}
             </button>
@@ -456,41 +432,38 @@ function SearchView({ onResults }: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PaperSelectionCard({ paper, selected, onToggle }: {
-  paper: PaperPreview
-  selected: boolean
-  onToggle: () => void
+  paper: PaperPreview; selected: boolean; onToggle: () => void
 }) {
   const [summary, setSummary]               = useState<string | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [showFullAbstract, setShowFullAbstract] = useState(false)
-  const srcStyle  = SOURCE_COLORS[paper.source] ?? SOURCE_COLORS.local
-  const canProcess = true
+  const srcStyle = SOURCE_COLORS[paper.source] ?? SOURCE_COLORS.local
 
-useEffect(() => {
-  if (!paper.abstract) return   // nothing to summarise — leave summary as null
-  setSummaryLoading(true)
-  fetch('/api/generate/followup', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      context: `Summarize this research paper abstract in 2-3 plain sentences for a non-specialist:\n\n${paper.abstract}`,
-    }),
-  })
-    .then(r => r.ok ? r.json() : Promise.reject())
-    .then(data => {
-      const qs: string[] = data.questions ?? []
-      setSummary(qs.length > 0 ? qs.join(' ') : truncateAbstract(paper.abstract, 2))
+  useEffect(() => {
+    if (!paper.abstract) return
+    setSummaryLoading(true)
+    fetch('/api/generate/followup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        context: `Summarize this research paper abstract in 2-3 plain sentences for a non-specialist:\n\n${paper.abstract}`,
+      }),
     })
-    .catch(() => setSummary(truncateAbstract(paper.abstract, 2)))
-    .finally(() => setSummaryLoading(false))
-}, [paper.paper_id])
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => {
+        const qs: string[] = data.questions ?? []
+        setSummary(qs.length > 0 ? qs.join(' ') : truncateAbstract(paper.abstract, 2))
+      })
+      .catch(() => setSummary(truncateAbstract(paper.abstract, 2)))
+      .finally(() => setSummaryLoading(false))
+  }, [paper.paper_id])
 
   return (
     <div className="card fade-in" style={{ marginBottom: '12px', border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, background: selected ? 'rgba(16,185,129,0.04)' : 'var(--bg-2)', transition: 'all 0.15s' }}>
       <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
         <div style={{ flexShrink: 0, paddingTop: '2px' }}>
-          <button onClick={onToggle} disabled={!canProcess} title={!canProcess ? 'Abstract only — chat unavailable' : undefined}
-            style={{ width: '22px', height: '22px', borderRadius: '6px', border: `2px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, background: selected ? 'var(--accent)' : 'transparent', cursor: canProcess ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.15s', opacity: canProcess ? 1 : 0.4 }}>
+          <button onClick={onToggle}
+            style={{ width: '22px', height: '22px', borderRadius: '6px', border: `2px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, background: selected ? 'var(--accent)' : 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.15s' }}>
             {selected && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
           </button>
         </div>
@@ -539,9 +512,7 @@ useEffect(() => {
 }
 
 function SelectionView({ papers, onSelect, onBack }: {
-  papers:   PaperPreview[]
-  onSelect: (selected: PaperPreview[]) => void
-  onBack:   () => void
+  papers: PaperPreview[]; onSelect: (selected: PaperPreview[]) => void; onBack: () => void
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [loading, setLoading]   = useState(false)
@@ -550,15 +521,11 @@ function SelectionView({ papers, onSelect, onBack }: {
   function toggle(paperId: string) {
     setSelected(prev => {
       const next = new Set(prev)
-      if (next.has(paperId)) next.delete(paperId)
-      else next.add(paperId)
+      if (next.has(paperId)) next.delete(paperId); else next.add(paperId)
       return next
     })
   }
-
-  function selectAll() {
-    setSelected(new Set(papers.filter(p => p.has_pdf || p.source !== 'pubmed').map(p => p.paper_id)))
-  }
+  function selectAll()   { setSelected(new Set(papers.map(p => p.paper_id))) }
   function deselectAll() { setSelected(new Set()) }
 
   async function handleProcess() {
@@ -573,8 +540,6 @@ function SelectionView({ papers, onSelect, onBack }: {
     }
   }
 
-  const processable = papers
-
   return (
     <div style={{ minHeight: '100vh', padding: '32px 24px' }}>
       <div style={{ maxWidth: '760px', margin: '0 auto' }}>
@@ -586,8 +551,8 @@ function SelectionView({ papers, onSelect, onBack }: {
             </div>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <button className="btn btn-ghost btn-sm" onClick={onBack}>← New search</button>
-              <button className="btn btn-ghost btn-sm" onClick={selected.size === processable.length ? deselectAll : selectAll}>
-                {selected.size === processable.length ? 'Deselect all' : 'Select all'}
+              <button className="btn btn-ghost btn-sm" onClick={selected.size === papers.length ? deselectAll : selectAll}>
+                {selected.size === papers.length ? 'Deselect all' : 'Select all'}
               </button>
               <button className="btn btn-primary" onClick={handleProcess} disabled={selected.size === 0 || loading} style={{ minWidth: '140px' }}>
                 {loading ? <><Spinner />Starting…</> : selected.size === 0 ? 'Select papers' : `Process ${selected.size} paper${selected.size !== 1 ? 's' : ''}`}
@@ -595,14 +560,12 @@ function SelectionView({ papers, onSelect, onBack }: {
             </div>
           </div>
           <div style={{ height: '3px', background: 'var(--border)', borderRadius: '2px', overflow: 'hidden' }}>
-            <div style={{ height: '100%', background: 'var(--accent)', borderRadius: '2px', width: `${processable.length ? (selected.size / processable.length) * 100 : 0}%`, transition: 'width 0.3s ease' }} />
+            <div style={{ height: '100%', background: 'var(--accent)', borderRadius: '2px', width: `${papers.length ? (selected.size / papers.length) * 100 : 0}%`, transition: 'width 0.3s ease' }} />
           </div>
         </div>
         {error && <div className="notice notice-error" style={{ marginBottom: '16px' }}>{error}</div>}
         {papers.map(paper => (
-          <div key={paper.paper_id}>
-            <PaperSelectionCard paper={paper} selected={selected.has(paper.paper_id)} onToggle={() => toggle(paper.paper_id)} />
-          </div>
+          <PaperSelectionCard key={paper.paper_id} paper={paper} selected={selected.has(paper.paper_id)} onToggle={() => toggle(paper.paper_id)} />
         ))}
         {papers.length === 0 && (
           <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-3)' }}>No papers found.</div>
@@ -643,8 +606,7 @@ function PaperCard({ paper }: { paper: PaperStatus }) {
 }
 
 function ProcessingView({ papers, onDone }: {
-  papers: Paper[]
-  onDone: (processedPapers: Paper[]) => void
+  papers: Paper[]; onDone: (processedPapers: Paper[]) => void
 }) {
   const [statuses, setStatuses] = useState<Record<string, PaperStatus>>(
     () => Object.fromEntries(papers.map(p => [p.paper_id, { ...p }]))
@@ -891,8 +853,7 @@ function GenerationPanel({ paperId }: { paperId: string }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function FollowUpSuggestions({ lastResponse, onSelect }: {
-  lastResponse: string
-  onSelect: (q: string) => void
+  lastResponse: string; onSelect: (q: string) => void
 }) {
   const [questions, setQuestions] = useState<string[]>([])
   const [loading, setLoading]     = useState(false)
@@ -944,56 +905,37 @@ function FollowUpSuggestions({ lastResponse, onSelect }: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Chat History Sidebar
+// Session Sidebar
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SessionSidebar({
-  sessions,
-  activeSessionId,
-  onSelect,
-  onDelete,
-  onNewSearch,
-}: {
-  sessions:        Session[]
-  activeSessionId: string | null
-  onSelect:        (sessionId: string) => void
-  onDelete:        (sessionId: string) => void
-  onNewSearch:     () => void
+function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSearch }: {
+  sessions: Session[]; activeSessionId: string | null
+  onSelect: (sessionId: string) => void
+  onDelete: (sessionId: string) => void
+  onNewSearch: () => void
 }) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [deleting, setDeleting]           = useState<string | null>(null)
 
   async function handleDelete(sessionId: string) {
     setDeleting(sessionId)
-    try {
-      await deleteSession(sessionId)
-      onDelete(sessionId)
-    } catch { /* non-critical — parent will still remove from list */ }
+    try { await deleteSession(sessionId); onDelete(sessionId) }
+    catch { /* non-critical */ }
     finally { setDeleting(null); setConfirmDelete(null) }
   }
 
   const groups = groupSessions(sessions)
 
   return (
-    <div style={{
-      width: '260px', flexShrink: 0,
-      background: 'var(--bg-2)',
-      borderRight: '1px solid var(--border)',
-      display: 'flex', flexDirection: 'column',
-      overflow: 'hidden',
-    }}>
-      {/* Header */}
+    <div style={{ width: '260px', flexShrink: 0, background: 'var(--bg-2)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={{ padding: '16px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
           <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', flexShrink: 0 }} />
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', letterSpacing: '0.08em' }}>RESEARCHRAG</span>
         </div>
-        <button className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>
-          + New search
-        </button>
+        <button className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>+ New search</button>
       </div>
 
-      {/* Session list */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
         {sessions.length === 0 && (
           <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', padding: '16px 8px', textAlign: 'center', lineHeight: 1.6 }}>
@@ -1003,133 +945,54 @@ function SessionSidebar({
 
         {groups.map(group => (
           <div key={group.label}>
-            {/* Date group header */}
-            <p style={{
-              fontSize: '0.6875rem', fontWeight: 600, color: 'var(--text-3)',
-              textTransform: 'uppercase', letterSpacing: '0.08em',
-              padding: '8px 8px 4px',
-            }}>
+            <p style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '8px 8px 4px' }}>
               {group.label}
             </p>
-
             {group.sessions.map(s => {
-              const isActive    = s.session_id === activeSessionId
-              const isConfirm   = confirmDelete === s.session_id
-              const isDeleting  = deleting === s.session_id
-              const srcStyle    = SOURCE_COLORS[s.title ? 'arxiv' : 'local'] // fallback
-              const displayTitle = s.title || s.topic || s.session_id
+              const isActive   = s.session_id === activeSessionId
+              const isConfirm  = confirmDelete === s.session_id
+              const isDeleting = deleting === s.session_id
+              const modeColor  = MODE_COLORS[s.mode] ?? 'var(--accent)'
 
               return (
                 <div key={s.session_id}
-                  style={{
-                    position: 'relative',
-                    borderRadius: 'var(--radius)',
-                    marginBottom: '2px',
-                    background: isActive ? 'var(--bg-3)' : 'transparent',
-                    border: `1px solid ${isActive ? 'var(--border-2)' : 'transparent'}`,
-                    transition: 'all 0.12s',
-                  }}
-                  onMouseEnter={e => {
-                    if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-3)'
-                  }}
-                  onMouseLeave={e => {
-                    if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'transparent'
-                  }}
-                >
-                  {/* Session button */}
-                  <button
-                    onClick={() => onSelect(s.session_id)}
-                    style={{
-                      width: '100%', textAlign: 'left',
-                      padding: '9px 32px 9px 10px',
-                      background: 'transparent', border: 'none',
-                      cursor: 'pointer', borderRadius: 'var(--radius)',
-                    }}
-                  >
-                    {/* Title */}
-                    <p style={{
-                      fontSize: '0.875rem', fontWeight: isActive ? 600 : 400,
-                      color: isActive ? 'var(--text)' : 'var(--text-2)',
-                      overflow: 'hidden', textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap', marginBottom: '3px',
-                      lineHeight: 1.3,
-                    }}>
-                      {displayTitle}
+                  style={{ position: 'relative', borderRadius: 'var(--radius)', marginBottom: '2px', background: isActive ? 'var(--bg-3)' : 'transparent', border: `1px solid ${isActive ? 'var(--border-2)' : 'transparent'}`, transition: 'all 0.12s' }}
+                  onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-3)' }}
+                  onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}>
+                  <button onClick={() => onSelect(s.session_id)}
+                    style={{ width: '100%', textAlign: 'left', padding: '9px 32px 9px 10px', background: 'transparent', border: 'none', cursor: 'pointer', borderRadius: 'var(--radius)' }}>
+                    <p style={{ fontSize: '0.875rem', fontWeight: isActive ? 600 : 400, color: isActive ? 'var(--text)' : 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '3px', lineHeight: 1.3 }}>
+                      {s.title || s.topic || s.session_id}
                     </p>
-
-                    {/* Meta row: level badge + relative time */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{
-                        fontSize: '0.6875rem', fontFamily: 'var(--font-mono)',
-                        color: isActive ? 'var(--accent)' : 'var(--text-3)',
-                        background: isActive ? 'var(--accent-glow)' : 'transparent',
-                        padding: isActive ? '1px 5px' : '0',
-                        borderRadius: '8px',
-                      }}>
-                        {s.level}
+                      {/* Mode badge */}
+                      <span style={{ fontSize: '0.6rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: modeColor, background: `${modeColor}22`, padding: '1px 5px', borderRadius: '8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        {s.mode}
                       </span>
-                      <span style={{ fontSize: '0.6875rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-                        {relativeTime(s.last_active_at)}
-                      </span>
+                      <span style={{ fontSize: '0.6875rem', color: isActive ? 'var(--accent)' : 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{s.level}</span>
+                      <span style={{ fontSize: '0.6875rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{relativeTime(s.last_active_at)}</span>
                     </div>
                   </button>
 
-                  {/* Delete button — shown on hover via CSS sibling trick via state */}
                   {!isConfirm && (
-                    <button
-                      onClick={e => { e.stopPropagation(); setConfirmDelete(s.session_id) }}
-                      title="Delete session"
-                      style={{
-                        position: 'absolute', top: '50%', right: '6px',
-                        transform: 'translateY(-50%)',
-                        width: '22px', height: '22px',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        background: 'transparent', border: 'none', cursor: 'pointer',
-                        color: 'var(--text-3)', borderRadius: '4px',
-                        opacity: isActive ? 1 : 0,
-                        transition: 'opacity 0.15s, color 0.15s',
-                      }}
-                      onMouseEnter={e => {
-                        (e.currentTarget as HTMLButtonElement).style.color = 'var(--error)'
-                        // Show on hover via parent hover
-                        const parent = (e.currentTarget as HTMLButtonElement).parentElement
-                        if (parent) (e.currentTarget as HTMLButtonElement).style.opacity = '1'
-                      }}
-                      onMouseLeave={e => {
-                        (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-3)'
-                        if (!isActive) (e.currentTarget as HTMLButtonElement).style.opacity = '0'
-                      }}
-                    >
+                    <button onClick={e => { e.stopPropagation(); setConfirmDelete(s.session_id) }} title="Delete session"
+                      style={{ position: 'absolute', top: '50%', right: '6px', transform: 'translateY(-50%)', width: '22px', height: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-3)', borderRadius: '4px', opacity: isActive ? 1 : 0, transition: 'opacity 0.15s, color 0.15s' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--error)'; (e.currentTarget as HTMLButtonElement).style.opacity = '1' }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-3)'; if (!isActive) (e.currentTarget as HTMLButtonElement).style.opacity = '0' }}>
                       <IconTrash />
                     </button>
                   )}
 
-                  {/* Inline confirm delete */}
                   {isConfirm && (
-                    <div className="fade-in" style={{
-                      position: 'absolute', inset: 0,
-                      background: 'var(--bg-3)',
-                      borderRadius: 'var(--radius)',
-                      display: 'flex', alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '0 10px', gap: '6px',
-                      border: '1px solid var(--error-bg)',
-                    }}>
-                      <span style={{ fontSize: '0.8125rem', color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
-                        Delete?
-                      </span>
+                    <div className="fade-in" style={{ position: 'absolute', inset: 0, background: 'var(--bg-3)', borderRadius: 'var(--radius)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 10px', gap: '6px', border: '1px solid var(--error-bg)' }}>
+                      <span style={{ fontSize: '0.8125rem', color: 'var(--text-2)', whiteSpace: 'nowrap' }}>Delete?</span>
                       <div style={{ display: 'flex', gap: '4px' }}>
-                        <button
-                          onClick={e => { e.stopPropagation(); handleDelete(s.session_id) }}
-                          disabled={isDeleting}
-                          style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: 'none', background: 'var(--error)', color: '#fff', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
-                        >
+                        <button onClick={e => { e.stopPropagation(); handleDelete(s.session_id) }} disabled={isDeleting}
+                          style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: 'none', background: 'var(--error)', color: '#fff', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>
                           {isDeleting ? '…' : 'Yes'}
                         </button>
-                        <button
-                          onClick={e => { e.stopPropagation(); setConfirmDelete(null) }}
-                          style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
-                        >
+                        <button onClick={e => { e.stopPropagation(); setConfirmDelete(null) }}
+                          style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>
                           No
                         </button>
                       </div>
@@ -1150,19 +1013,20 @@ function SessionSidebar({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ChatView({ initialPapers, onNewSearch }: {
-  initialPapers: Paper[]
-  onNewSearch: () => void
+  initialPapers: Paper[]; onNewSearch: () => void
 }) {
   const [sessions, setSessions]           = useState<Session[]>([])
   const [activeSession, setActiveSession] = useState<SessionDetail | null>(null)
   const [messages, setMessages]           = useState<Message[]>([])
   const [input, setInput]                 = useState('')
   const [level, setLevel]                 = useState<Level>('beginner')
+  const [chatMode, setChatMode]           = useState<ChatMode>('standard')
   const [sending, setSending]             = useState(false)
   const [chatError, setChatError]         = useState('')
   const [sessError, setSessError]         = useState('')
   const [generateOpen, setGenerateOpen]   = useState(false)
   const [activePaper, setActivePaper]     = useState<Paper | null>(null)
+  const [modeSwitching, setModeSwitching] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const lastAssistantMessage = messages.filter(m => m.role === 'assistant').slice(-1)[0]?.content ?? ''
@@ -1186,6 +1050,7 @@ function ChatView({ initialPapers, onNewSearch }: {
       setActiveSession(res.session)
       setMessages(res.session.messages)
       setLevel((res.session.level as Level) ?? 'beginner')
+      setChatMode(res.session.mode ?? 'standard')
       try {
         const papersRes = await listPapers({ stage: 'processed' })
         const current = papersRes.papers.find(p => p.paper_id === res.session.paper_id)
@@ -1200,17 +1065,52 @@ function ChatView({ initialPapers, onNewSearch }: {
 
   function handleSessionDeleted(sessionId: string) {
     setSessions(prev => prev.filter(s => s.session_id !== sessionId))
-    // If the deleted session was active, clear the chat area
     if (activeSession?.session_id === sessionId) {
-      setActiveSession(null)
-      setMessages([])
-      setActivePaper(null)
+      setActiveSession(null); setMessages([]); setActivePaper(null)
     }
   }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // ── Mode switching: create a new session for the same paper ───────────────
+  async function handleModeSwitch(newMode: ChatMode) {
+    if (!activePaper || newMode === chatMode || modeSwitching) return
+    setModeSwitching(true); setSessError('')
+
+    try {
+      // Check if a session already exists for this paper + mode combination
+      const existing = sessions.find(
+        s => s.paper_id === activePaper.paper_id && s.mode === newMode
+      )
+
+      if (existing) {
+        // Re-use the existing session for this mode
+        await openSession(existing.session_id)
+      } else {
+        // Create a brand-new session for the new mode
+        const res = await createSession({
+          paper_id: activePaper.paper_id,
+          topic:    activeSession?.topic ?? activePaper.title ?? activePaper.paper_id,
+          level,
+          mode:     newMode,
+        })
+        const newSession = res.session
+        setSessions(prev => [
+          { ...newSession, messages: undefined as unknown as Message[] } as unknown as Session,
+          ...prev,
+        ])
+        await openSession(newSession.session_id)
+      }
+
+      setChatMode(newMode)
+    } catch (err: unknown) {
+      setSessError(err instanceof Error ? err.message : 'Failed to switch mode.')
+    } finally {
+      setModeSwitching(false)
+    }
+  }
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault()
@@ -1227,7 +1127,6 @@ function ChatView({ initialPapers, onNewSearch }: {
       const res = await sendMessage(activeSession.session_id, text, level)
       const assistantMsg: Message = { id: Date.now() + 1, role: 'assistant', content: res.response, level, created_at: null }
       setMessages(prev => [...prev, assistantMsg])
-      // Refresh session list to update last_active_at in sidebar
       setSessions(prev => prev.map(s =>
         s.session_id === activeSession.session_id
           ? { ...s, last_active_at: new Date().toISOString() }
@@ -1248,11 +1147,12 @@ function ChatView({ initialPapers, onNewSearch }: {
   }
 
   const paperIsReady = activePaper?.pipeline_stage === 'processed' && (activePaper?.chunk_count ?? 0) > 0
+  const activeModeConfig = CHAT_MODES.find(m => m.id === chatMode) ?? CHAT_MODES[0]
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
 
-      {/* ── Chat history sidebar ── */}
+      {/* ── Sidebar ── */}
       <SessionSidebar
         sessions={sessions}
         activeSessionId={activeSession?.session_id ?? null}
@@ -1261,11 +1161,11 @@ function ChatView({ initialPapers, onNewSearch }: {
         onNewSearch={onNewSearch}
       />
 
-      {/* ── Main chat area ── */}
+      {/* ── Main area ── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
 
         {/* Header */}
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', flexShrink: 0, gap: '12px' }}>
+        <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', flexShrink: 0, gap: '12px' }}>
           <div style={{ minWidth: 0 }}>
             <p style={{ fontWeight: 600, fontSize: '0.9375rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {activeSession?.title ?? activeSession?.topic ?? activePaper?.title ?? 'Select a session'}
@@ -1277,7 +1177,33 @@ function ChatView({ initialPapers, onNewSearch }: {
             )}
             {sessError && <p style={{ fontSize: '0.8125rem', color: 'var(--error)' }}>{sessError}</p>}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+
+            {/* ── Chat mode selector ── */}
+            <div style={{ display: 'flex', background: 'var(--bg-3)', borderRadius: 'var(--radius)', padding: '3px', border: '1px solid var(--border)', gap: '2px' }}>
+              {CHAT_MODES.map(m => {
+                const isActive = chatMode === m.id
+                return (
+                  <button key={m.id} onClick={() => handleModeSwitch(m.id)}
+                    disabled={modeSwitching || !activePaper}
+                    title={m.description}
+                    style={{
+                      padding: '5px 12px', borderRadius: '6px', border: 'none',
+                      cursor: modeSwitching || !activePaper ? 'not-allowed' : 'pointer',
+                      fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', fontWeight: 500,
+                      transition: 'all 0.15s',
+                      background: isActive ? m.color + '22' : 'transparent',
+                      color: isActive ? m.color : 'var(--text-3)',
+                      opacity: modeSwitching ? 0.6 : 1,
+                    }}>
+                    {modeSwitching && isActive ? <Spinner size="spinner-sm" /> : m.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Level selector */}
             <div style={{ display: 'flex', gap: '4px' }}>
               {(['beginner', 'intermediate', 'advanced'] as Level[]).map(l => (
                 <button key={l} onClick={() => handleLevelChange(l)}
@@ -1286,6 +1212,7 @@ function ChatView({ initialPapers, onNewSearch }: {
                 </button>
               ))}
             </div>
+
             <button onClick={() => setGenerateOpen(o => !o)} className="btn btn-ghost btn-sm"
               style={{ borderColor: generateOpen ? 'var(--accent)' : undefined, color: generateOpen ? 'var(--accent)' : undefined }}>
               {generateOpen ? 'Hide generate' : 'Generate ✦'}
@@ -1298,6 +1225,16 @@ function ChatView({ initialPapers, onNewSearch }: {
 
           {/* Messages */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+
+            {/* Mode context banner */}
+            {activeSession && chatMode !== 'standard' && (
+              <div style={{ padding: '8px 20px', background: `${activeModeConfig.color}11`, borderBottom: `1px solid ${activeModeConfig.color}33`, display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: activeModeConfig.color, flexShrink: 0 }} />
+                <span style={{ fontSize: '0.8125rem', color: activeModeConfig.color, fontWeight: 500 }}>{activeModeConfig.label} mode</span>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--text-3)' }}>— {activeModeConfig.description}</span>
+              </div>
+            )}
+
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
               {!activeSession && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
@@ -1308,9 +1245,21 @@ function ChatView({ initialPapers, onNewSearch }: {
               )}
 
               {messages.map((msg, i) => (
-                <div key={msg.id ?? i} className="fade-in" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: '14px' }}>
-                  <div style={{ maxWidth: '72%', padding: '10px 14px', borderRadius: 'var(--radius-lg)', background: msg.role === 'user' ? 'var(--accent)' : 'var(--bg-3)', color: msg.role === 'user' ? '#fff' : 'var(--text)', fontSize: '0.9rem', lineHeight: 1.6, borderBottomRightRadius: msg.role === 'user' ? '4px' : undefined, borderBottomLeftRadius: msg.role === 'assistant' ? '4px' : undefined }}>
-                    {msg.content}
+                <div key={msg.id ?? i} className="fade-in"
+                  style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: '14px' }}>
+                  <div style={{
+                    maxWidth: '72%', padding: '10px 14px',
+                    borderRadius: 'var(--radius-lg)',
+                    background: msg.role === 'user' ? 'var(--accent)' : 'var(--bg-3)',
+                    color: msg.role === 'user' ? '#fff' : 'var(--text)',
+                    fontSize: '0.9rem', lineHeight: 1.6,
+                    borderBottomRightRadius: msg.role === 'user'      ? '4px' : undefined,
+                    borderBottomLeftRadius:  msg.role === 'assistant' ? '4px' : undefined,
+                  }}>
+                    {msg.role === 'assistant'
+                      ? <div className="md-body"><ReactMarkdown>{msg.content}</ReactMarkdown></div>
+                      : msg.content
+                    }
                   </div>
                 </div>
               ))}
@@ -1336,7 +1285,12 @@ function ChatView({ initialPapers, onNewSearch }: {
               {chatError && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{chatError}</div>}
               <form onSubmit={handleSend} style={{ display: 'flex', gap: '8px' }}>
                 <input className="input" value={input} onChange={e => setInput(e.target.value)}
-                  placeholder={activeSession ? 'Ask anything about this paper…' : 'Waiting for a session…'}
+                  placeholder={
+                    !activeSession ? 'Waiting for a session…'
+                    : chatMode === 'study' ? 'Ask for flashcards, questions, or examples…'
+                    : chatMode === 'technical' ? 'Ask for system design, APIs, or implementation…'
+                    : 'Ask anything about this paper…'
+                  }
                   disabled={!activeSession || sending} maxLength={2000} style={{ flex: 1 }} />
                 <button type="submit" className="btn btn-primary"
                   disabled={!activeSession || !input.trim() || sending} style={{ flexShrink: 0 }}>
