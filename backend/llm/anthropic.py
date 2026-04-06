@@ -1,9 +1,5 @@
 """
 anthropic.py — Anthropic Claude implementation of LLMProvider.
-
-All SDK calls run in run_in_executor (blocking SDK).
-All paper context is sanitized before use in prompts.
-Retries on transient errors up to MAX_RETRIES.
 """
 
 import asyncio
@@ -15,8 +11,6 @@ from config import cfg
 from llm.base import LLMProvider, parse_json_response, sanitize_context
 
 logger = logging.getLogger(__name__)
-
-# Prompt templates ─────────────────────────────────────────────────────────────
 
 _CHAT_PROMPT = """You are helping a user understand the following research paper.
 
@@ -98,7 +92,6 @@ class AnthropicProvider(LLMProvider):
         self._model_name = cfg.LLM_MODEL
 
     def _call_sync(self, system: str, messages: list[dict]) -> str:
-        """Blocking Anthropic messages call."""
         response = self._client.messages.create(
             model=self._model_name,
             max_tokens=2048,
@@ -108,10 +101,7 @@ class AnthropicProvider(LLMProvider):
         return response.content[0].text if response.content else ""
 
     async def _with_retry(self, system: str, messages: list[dict]) -> str:
-        """Run the blocking call in executor with retry on transient errors."""
-        # FIX L1: Use get_running_loop() — get_event_loop() is deprecated in
-        # Python 3.10+ and may raise RuntimeError inside coroutines in Python 3.12.
-        loop = asyncio.get_running_loop()
+        loop     = asyncio.get_running_loop()
         last_exc = None
         for attempt in range(1, cfg.MAX_RETRIES + 1):
             try:
@@ -125,9 +115,12 @@ class AnthropicProvider(LLMProvider):
                     await asyncio.sleep(wait)
         raise RuntimeError(f"Anthropic call failed after {cfg.MAX_RETRIES} attempts: {last_exc}") from last_exc
 
-    async def chat_response(self, context, title, authors, history, message, level) -> str:
-        safe_context = sanitize_context(context)
-        system = self.SYSTEM_PROMPT + "\n\n" + _CHAT_PROMPT.format(
+    async def chat_response(
+        self, context, title, authors, history, message, level, mode="standard"
+    ) -> str:
+        safe_context  = sanitize_context(context)
+        system_prompt = self.get_system_prompt(mode)
+        system        = system_prompt + "\n\n" + _CHAT_PROMPT.format(
             title=title,
             authors=", ".join(authors) if authors else "Unknown",
             context=safe_context,

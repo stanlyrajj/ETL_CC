@@ -1,12 +1,5 @@
 """
 gemini.py — Google Gemini implementation of LLMProvider.
-
-Uses google-genai (the current supported SDK, replacing google-generativeai).
-Install: pip install google-genai
-
-All SDK calls run in run_in_executor since the sync client is blocking.
-All paper context is sanitized before use in prompts.
-Retries on transient errors up to MAX_RETRIES.
 """
 
 import asyncio
@@ -19,8 +12,6 @@ from config import cfg
 from llm.base import LLMProvider, parse_json_response, sanitize_context
 
 logger = logging.getLogger(__name__)
-
-# Prompt templates ─────────────────────────────────────────────────────────────
 
 _CHAT_PROMPT = """You are helping a user understand the following research paper.
 
@@ -104,16 +95,11 @@ class GeminiProvider(LLMProvider):
         self._model_name = cfg.LLM_MODEL
 
     def _chat_sync(self, system: str, history: list[dict], message: str) -> str:
-        """Blocking Gemini chat call using the google-genai SDK."""
-        # Convert history to google-genai Content objects
         contents = []
         for msg in history:
             role = "user" if msg["role"] == "user" else "model"
             contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
-
-        # Append the new user message
         contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
-
         response = self._client.models.generate_content(
             model=self._model_name,
             contents=contents,
@@ -122,7 +108,6 @@ class GeminiProvider(LLMProvider):
         return response.text or ""
 
     def _generate_sync(self, system: str, prompt: str) -> str:
-        """Blocking Gemini single-turn generation call."""
         response = self._client.models.generate_content(
             model=self._model_name,
             contents=prompt,
@@ -131,10 +116,7 @@ class GeminiProvider(LLMProvider):
         return response.text or ""
 
     async def _with_retry(self, fn, *args):
-        """Run a blocking function in executor with retry on transient errors."""
-        # FIX L1: Use get_running_loop() — get_event_loop() is deprecated in
-        # Python 3.10+ and may raise RuntimeError inside coroutines in Python 3.12.
-        loop = asyncio.get_running_loop()
+        loop     = asyncio.get_running_loop()
         last_exc = None
         for attempt in range(1, cfg.MAX_RETRIES + 1):
             try:
@@ -152,9 +134,12 @@ class GeminiProvider(LLMProvider):
             f"Gemini call failed after {cfg.MAX_RETRIES} attempts: {last_exc}"
         ) from last_exc
 
-    async def chat_response(self, context, title, authors, history, message, level) -> str:
-        safe_context = sanitize_context(context)
-        system = self.SYSTEM_PROMPT + "\n\n" + _CHAT_PROMPT.format(
+    async def chat_response(
+        self, context, title, authors, history, message, level, mode="standard"
+    ) -> str:
+        safe_context  = sanitize_context(context)
+        system_prompt = self.get_system_prompt(mode)
+        system        = system_prompt + "\n\n" + _CHAT_PROMPT.format(
             title=title,
             authors=", ".join(authors) if authors else "Unknown",
             context=safe_context,
