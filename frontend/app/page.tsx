@@ -1042,12 +1042,11 @@ function ProcessingView({ papers, onDone }: { papers: Paper[]; onDone: (processe
 // ─────────────────────────────────────────────────────────────────────────────
 // Generation Panel
 // ─────────────────────────────────────────────────────────────────────────────
-
+ 
 function GenerationPanel({ paperId }: { paperId: string }) {
   const [open, setOpen]               = useState(true)
   const [platform, setPlatform]       = useState<Platform>('twitter')
-  const [style, setStyle]             = useState('educational')
-  const [tone, setTone]               = useState('conversational')
+  const [description, setDescription] = useState('')
   const [colorScheme, setColorScheme] = useState('light')
   const [loading, setLoading]         = useState(false)
   const [error, setError]             = useState('')
@@ -1060,19 +1059,41 @@ function GenerationPanel({ paperId }: { paperId: string }) {
   useEffect(() => { setResult(null); setError(''); setExportUrl(''); setShareLinks(null) }, [platform])
   useEffect(() => () => { esRef.current?.close() }, [])
 
+  const placeholders: Record<Platform, string> = {
+    twitter:  'e.g. "Punchy breakdown for ML engineers, heavy on the data, 1-2 emojis per tweet"',
+    linkedin: 'e.g. "Thought-leadership post for tech executives, professional tone, no emojis"',
+    carousel: 'e.g. "Visual summary for a non-technical audience, keep it simple and engaging"',
+  }
+
   async function handleGenerate() {
     setLoading(true); setError(''); setResult(null); setExportUrl(''); setShareLinks(null)
+    const desc = description.trim() || 'Educational and accessible, suitable for a general professional audience.'
     try {
-      const res = await generateContent({ paper_id: paperId, platform, style, tone, color_scheme: colorScheme })
-      const qk  = res.queue_key
+      const res = await generateContent({
+        paper_id: paperId, platform,
+        description: desc,
+        color_scheme: colorScheme,
+      })
+      const qk = res.queue_key
       await new Promise<void>((resolve, reject) => {
         const es = new EventSource(`${BACKEND}/api/generate/${qk}/progress`)
         esRef.current = es
         es.addEventListener('completed', async () => {
-          try { const hist = await generationHistory(paperId, platform); const latest = hist.items[0] ?? null; setResult(latest); if (latest) { const links = await getShareLinks(latest.id); setShareLinks(links) } } catch { /* ignore */ }
+          try {
+            const hist = await generationHistory(paperId, platform)
+            const latest = hist.items[0] ?? null
+            setResult(latest)
+            if (latest) { const links = await getShareLinks(latest.id); setShareLinks(links) }
+          } catch { /* ignore */ }
         })
-        es.addEventListener('done', (e: MessageEvent) => { try { const d = JSON.parse(e.data); if (!d.success && d.error) reject(new Error(d.error)); else resolve() } catch { resolve() } es.close() })
-        es.addEventListener('failed', (e: MessageEvent) => { try { reject(new Error(JSON.parse(e.data).error ?? 'Generation failed')) } catch { reject(new Error('Generation failed')) } es.close() })
+        es.addEventListener('done', (e: MessageEvent) => {
+          try { const d = JSON.parse(e.data); if (!d.success && d.error) reject(new Error(d.error)); else resolve() } catch { resolve() }
+          es.close()
+        })
+        es.addEventListener('failed', (e: MessageEvent) => {
+          try { reject(new Error(JSON.parse(e.data).error ?? 'Generation failed')) } catch { reject(new Error('Generation failed')) }
+          es.close()
+        })
         es.onerror = () => { reject(new Error('SSE connection lost')); es.close() }
       })
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Generation failed.') }
@@ -1082,8 +1103,10 @@ function GenerationPanel({ paperId }: { paperId: string }) {
   async function handleExport() {
     if (!result) return
     setExporting(true)
-    try { const res = await exportCarousel(result.id); setExportUrl(`/api/generate/${result.id}/download?filename=${encodeURIComponent(res.filename)}`) }
-    catch (err: unknown) { setError(err instanceof Error ? err.message : 'Export failed.') }
+    try {
+      const res = await exportCarousel(result.id)
+      setExportUrl(`/api/generate/${result.id}/download?filename=${encodeURIComponent(res.filename)}`)
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Export failed.') }
     finally { setExporting(false) }
   }
 
@@ -1092,49 +1115,139 @@ function GenerationPanel({ paperId }: { paperId: string }) {
     try {
       if (platform === 'twitter') {
         const tweets: string[] = JSON.parse(result.content)
-        return <div>{tweets.map((t, i) => <div key={i} style={{ padding: '10px 12px', borderBottom: i < tweets.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '0.875rem', lineHeight: 1.6 }}><span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', marginRight: '8px' }}>{i + 1}</span>{t}</div>)}{result.hashtags?.length > 0 && <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>{result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', background: 'var(--accent-glow)', padding: '2px 8px', borderRadius: '12px' }}>{h}</span>)}</div>}</div>
+        return (
+          <div>
+            {tweets.map((t, i) => (
+              <div key={i} style={{ padding: '10px 12px', borderBottom: i < tweets.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '0.875rem', lineHeight: 1.6 }}>
+                <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', marginRight: '8px' }}>{i + 1}</span>{t}
+              </div>
+            ))}
+            {result.hashtags?.length > 0 && (
+              <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', background: 'var(--accent-glow)', padding: '2px 8px', borderRadius: '12px' }}>{h}</span>)}
+              </div>
+            )}
+          </div>
+        )
       }
-      if (platform === 'linkedin') return <div style={{ padding: '12px', fontSize: '0.875rem', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{result.content}{result.hashtags?.length > 0 && <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>{result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>{h}</span>)}</div>}</div>
+      if (platform === 'linkedin') {
+        // Try to parse inferred_attributes from the stored content
+        // LinkedIn content is stored as plain text, so we display it directly
+        return (
+          <div>
+            <div style={{ padding: '12px', fontSize: '0.875rem', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+              {result.content}
+            </div>
+            {result.hashtags?.length > 0 && (
+              <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>{h}</span>)}
+              </div>
+            )}
+          </div>
+        )
+      }
       if (platform === 'carousel') {
         const slides: Array<{ type: string; title: string; body: string }> = JSON.parse(result.content)
-        return <div>{slides.map((s, i) => <div key={i} style={{ padding: '10px 12px', borderBottom: i < slides.length - 1 ? '1px solid var(--border)' : 'none' }}><div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-3)', background: 'var(--bg-3)', padding: '1px 6px', borderRadius: '4px' }}>{s.type}</span><span style={{ fontWeight: 600, fontSize: '0.875rem' }}>{s.title}</span></div><p style={{ fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.5 }}>{s.body}</p></div>)}</div>
+        return (
+          <div>
+            {slides.map((s, i) => (
+              <div key={i} style={{ padding: '10px 12px', borderBottom: i < slides.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-3)', background: 'var(--bg-3)', padding: '1px 6px', borderRadius: '4px' }}>{s.type}</span>
+                  <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>{s.title}</span>
+                </div>
+                <p style={{ fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.5 }}>{s.body}</p>
+              </div>
+            ))}
+          </div>
+        )
       }
     } catch { return <div style={{ padding: '12px', fontSize: '0.875rem' }}>{result.content}</div> }
   }
 
   return (
     <div style={{ borderTop: '1px solid var(--border)' }}>
-      <button onClick={() => setOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text)', borderBottom: open ? '1px solid var(--border)' : 'none' }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text)', borderBottom: open ? '1px solid var(--border)' : 'none' }}>
         <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generate content</span>
         <IconChevron open={open} />
       </button>
+
       {open && (
         <div style={{ padding: '14px 16px' }}>
+
+          {/* Platform selector */}
           <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
             {(['twitter', 'linkedin', 'carousel'] as Platform[]).map(p => (
-              <button key={p} onClick={() => setPlatform(p)} style={{ flex: 1, padding: '6px', borderRadius: 'var(--radius)', border: `1px solid ${platform === p ? 'var(--accent)' : 'var(--border)'}`, background: platform === p ? 'var(--accent-glow)' : 'transparent', color: platform === p ? 'var(--accent)' : 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', cursor: 'pointer', transition: 'all 0.15s', fontWeight: 500 }}>
+              <button key={p} onClick={() => setPlatform(p)}
+                style={{ flex: 1, padding: '6px', borderRadius: 'var(--radius)', border: `1px solid ${platform === p ? 'var(--accent)' : 'var(--border)'}`, background: platform === p ? 'var(--accent-glow)' : 'transparent', color: platform === p ? 'var(--accent)' : 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', cursor: 'pointer', transition: 'all 0.15s', fontWeight: 500 }}>
                 {p.charAt(0).toUpperCase() + p.slice(1)}
               </button>
             ))}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-            <div><label className="label">Style</label><input className="input" value={style} onChange={e => setStyle(e.target.value)} placeholder="e.g. educational" /></div>
-            <div><label className="label">Tone</label><input className="input" value={tone} onChange={e => setTone(e.target.value)} placeholder="e.g. conversational" /></div>
+
+          {/* Content brief */}
+          <div style={{ marginBottom: '10px' }}>
+            <label className="label">
+              Content brief
+              <span style={{ fontWeight: 400, color: 'var(--text-3)', marginLeft: '6px' }}>— optional</span>
+            </label>
+            <textarea
+              className="textarea"
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder={placeholders[platform]}
+              maxLength={500}
+              style={{ minHeight: '72px', resize: 'vertical', fontSize: '0.8125rem' }}
+            />
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: '4px', lineHeight: 1.4 }}>
+              Describe your audience, tone, and style in plain English. The AI infers everything else.
+            </p>
           </div>
-          {platform === 'carousel' && <div style={{ marginBottom: '10px' }}><label className="label">Color scheme</label><select className="select" value={colorScheme} onChange={e => setColorScheme(e.target.value)}><option value="light">Light</option><option value="dark">Dark</option><option value="bold">Bold</option></select></div>}
-          {error && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{error}</div>}
-          <button className="btn btn-primary btn-full" onClick={handleGenerate} disabled={loading} style={{ marginBottom: '12px' }}>{loading ? <><Spinner />Generating…</> : 'Generate'}</button>
-          {result && (
-            <div className="fade-in" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', marginBottom: '10px' }}>
-              <div style={{ background: 'var(--bg-3)', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-2)' }}>Preview</span></div>
-              <div style={{ background: 'var(--bg-2)', maxHeight: '260px', overflowY: 'auto' }}>{renderPreview()}</div>
+
+          {/* Color scheme — carousel only */}
+          {platform === 'carousel' && (
+            <div style={{ marginBottom: '10px' }}>
+              <label className="label">Color scheme</label>
+              <select className="select" value={colorScheme} onChange={e => setColorScheme(e.target.value)}>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="bold">Bold</option>
+              </select>
             </div>
           )}
+
+          {error && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{error}</div>}
+
+          <button className="btn btn-primary btn-full" onClick={handleGenerate} disabled={loading} style={{ marginBottom: '12px' }}>
+            {loading ? <><Spinner />Generating…</> : 'Generate'}
+          </button>
+
+          {result && (
+            <div className="fade-in" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', marginBottom: '10px' }}>
+              <div style={{ background: 'var(--bg-3)', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-2)' }}>Preview</span>
+              </div>
+              <div style={{ background: 'var(--bg-2)', maxHeight: '260px', overflowY: 'auto' }}>
+                {renderPreview()}
+              </div>
+            </div>
+          )}
+
           {result && (
             <div className="fade-in" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {platform === 'carousel' && <button className="btn btn-ghost btn-sm" onClick={handleExport} disabled={exporting}>{exporting ? <><Spinner size="spinner-sm" />Exporting…</> : <><IconDownload />Export PDF</>}</button>}
+              {platform === 'carousel' && (
+                <button className="btn btn-ghost btn-sm" onClick={handleExport} disabled={exporting}>
+                  {exporting ? <><Spinner size="spinner-sm" />Exporting…</> : <><IconDownload />Export PDF</>}
+                </button>
+              )}
               {exportUrl && <a href={exportUrl} download className="btn btn-ghost btn-sm"><IconDownload />Download PDF</a>}
-              {shareLinks && (<><a href={shareLinks.linkedin_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />LinkedIn</a><a href={shareLinks.twitter_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />Twitter/X</a></>)}
+              {shareLinks && (
+                <>
+                  <a href={shareLinks.linkedin_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />LinkedIn</a>
+                  <a href={shareLinks.twitter_url}  target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />Twitter/X</a>
+                </>
+              )}
             </div>
           )}
         </div>

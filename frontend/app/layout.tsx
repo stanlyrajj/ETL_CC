@@ -13,7 +13,14 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      {/*
+        suppressHydrationWarning on <body> silences hydration mismatches
+        caused by browser extensions (password managers, form autofill tools)
+        that inject attributes like fdprocessedid onto form elements before
+        React hydrates. This is safe — it only suppresses warnings on the
+        body element itself, not on child components.
+      */}
+      <body suppressHydrationWarning>{children}</body>
     </html>
   )
 }
