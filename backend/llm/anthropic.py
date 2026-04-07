@@ -11,7 +11,8 @@ from config import cfg
 from llm.base import LLMProvider, parse_json_response, sanitize_context
 from llm.rate_limiter import llm_rate_limiter
 from llm.openai import (
-    _CHAT_PROMPT, _TWITTER_PROMPT, _LINKEDIN_PROMPT, _CAROUSEL_PROMPT,
+    _CHAT_PROMPT,
+    _TWITTER_PROMPT, _LINKEDIN_PROMPT, _CAROUSEL_PROMPT,
     _STUDY_OUTLINE_PROMPT, _STUDY_SECTION_PROMPT, _FLASHCARD_PROMPT,
     _TECHNICAL_SECTION_PROMPTS,
 )
@@ -76,20 +77,24 @@ class AnthropicProvider(LLMProvider):
 
     # ── Social ────────────────────────────────────────────────────────────────
 
-    async def generate_twitter_thread(self, context, title, style, tone) -> dict:
+    async def generate_twitter_thread(
+        self, context: str, title: str, description: str
+    ) -> dict:
         safe_context = sanitize_context(context)
         prompt = _TWITTER_PROMPT.format(
-            title=title, style=style, tone=tone, context=safe_context
+            title=title, description=description, context=safe_context
         )
         raw = await self._with_retry(
             self.SYSTEM_PROMPT, [{"role": "user", "content": prompt}]
         )
         return parse_json_response(raw)
 
-    async def generate_linkedin_post(self, context, title, style, tone) -> dict:
+    async def generate_linkedin_post(
+        self, context: str, title: str, description: str
+    ) -> dict:
         safe_context = sanitize_context(context)
         prompt = _LINKEDIN_PROMPT.format(
-            title=title, style=style, tone=tone, context=safe_context
+            title=title, description=description, context=safe_context
         )
         raw = await self._with_retry(
             self.SYSTEM_PROMPT, [{"role": "user", "content": prompt}]
@@ -97,11 +102,11 @@ class AnthropicProvider(LLMProvider):
         return parse_json_response(raw)
 
     async def generate_carousel_content(
-        self, context, title, style, tone, color_scheme
+        self, context: str, title: str, description: str, color_scheme: str
     ) -> dict:
         safe_context = sanitize_context(context)
         prompt = _CAROUSEL_PROMPT.format(
-            title=title, style=style, tone=tone,
+            title=title, description=description,
             color_scheme=color_scheme, context=safe_context,
         )
         raw = await self._with_retry(
