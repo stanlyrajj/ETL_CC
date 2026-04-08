@@ -27,110 +27,84 @@ The user's knowledge level is: {level}
 - intermediate: assume basic domain knowledge
 - advanced: use technical language freely"""
 
-_TWITTER_PROMPT = """You are creating a Twitter/X thread based on the research paper below.
+_TWITTER_PROMPT = """You are creating a Twitter/X thread to share insights from an academic research paper.
 
 Paper title: {title}
+Creator intent: {description}
 
-Content brief from the creator:
-\"\"\"{description}\"\"\"
-
-Use the brief above to infer the following and apply them throughout the thread:
-- Target audience (e.g. developers, researchers, general public)
-- Tone (e.g. formal, casual, punchy, enthusiastic)
-- Style (e.g. storytelling, data-driven, explanatory)
-- Hook type for the first tweet (e.g. bold claim, question, statistic, analogy)
-- Whether to include emojis (infer from brief; default: moderate)
-- Call-to-action style for the last tweet
+Inferred from the intent above, apply these attributes as you write:
+- Audience: who will read this thread
+- Voice: first-person researcher, third-person reporter, or explainer
+- Hook style: bold claim, surprising stat, question, or story opener
+- Depth: surface-level takeaway vs technical detail
+- Emoji use: none, subtle, or expressive
+- Thread structure: linear narrative, numbered insights, or pros/cons
 
 {context}
-
-Return ONLY a JSON object with this exact structure:
-{{
-  "tweets": [
-    {{"index": 1, "content": "tweet text here"}},
-    {{"index": 2, "content": "tweet text here"}}
-  ],
-  "hashtags": ["hashtag1", "hashtag2"]
-}}
 
 Rules:
-- Each tweet must be under 280 characters
-- Create 5-8 tweets
-- First tweet must hook the reader immediately
-- Last tweet must include a clear call-to-action
-- No markdown, no extra text outside the JSON"""
+- First tweet must be a strong hook that stops the scroll
+- Each tweet must be self-contained and under 280 characters
+- Final tweet should include a call-to-action or reflection
+- Create 6-8 tweets total
 
-_LINKEDIN_PROMPT = """You are writing a LinkedIn post based on the research paper below.
+Return ONLY a JSON object — no markdown, no extra text:
+{{"tweets": [{{"index": 1, "content": "..."}}], "hashtags": ["..."], "audience": "...", "hook_type": "..."}}"""
+
+_LINKEDIN_PROMPT = """You are writing a LinkedIn post to share insights from an academic research paper.
 
 Paper title: {title}
+Creator intent: {description}
 
-Content brief from the creator:
-\"\"\"{description}\"\"\"
-
-Use the brief above to infer the following and apply them throughout the post:
-- Target audience (e.g. engineers, executives, academics, students)
-- Tone (e.g. professional, conversational, thought-leadership, educational)
-- Style (e.g. storytelling, listicle, opinion-led, data-driven)
-- Hook type for the opening line (e.g. bold claim, question, statistic, personal insight)
-- Post length (concise ~150 words vs detailed ~300 words — infer from brief)
-- Whether to use emojis as bullet points or section breaks (infer from brief)
-- Call-to-action at the end (e.g. follow, comment, share, visit link)
+Inferred from the intent above, apply these attributes as you write:
+- Audience: who will read this post (practitioners, executives, students, general public)
+- Tone register: formal, conversational, inspirational, or analytical
+- Post structure: hook → insight → implication → CTA, or story → lesson → reflection
+- Personal framing: share as a reader reacting, an expert contextualising, or a neutral reporter
+- Line breaks: dense paragraphs or punchy short lines (LinkedIn rewards white space)
+- Depth: focus on headline finding, methodology, or real-world application
 
 {context}
 
-Return ONLY a JSON object with this exact structure:
-{{
-  "post": "full post text here",
-  "hook": "the opening line that grabs attention",
-  "hashtags": ["hashtag1", "hashtag2"],
-  "inferred_attributes": {{
-    "audience": "...",
-    "tone": "...",
-    "style": "...",
-    "length": "concise or detailed"
-  }}
-}}
+Rules:
+- Open with a hook line that earns the "see more" click
+- LinkedIn posts perform best at 150-300 words — aim for that range
+- End with a question or call-to-action to drive comments
+- Do NOT use generic filler phrases like "Exciting new research shows…"
 
-No markdown, no extra text outside the JSON."""
+Return ONLY a JSON object — no markdown, no extra text:
+{{"post": "...", "hashtags": ["..."], "hook": "...", "audience": "...", "word_count": 0}}"""
 
-_CAROUSEL_PROMPT = """You are creating LinkedIn carousel slide content based on the research paper below.
+_CAROUSEL_PROMPT = """You are designing a LinkedIn carousel to make an academic paper accessible and shareable.
 
 Paper title: {title}
-Color scheme: {color_scheme}
+Creator intent: {description}
+Visual style: {color_scheme}
 
-Content brief from the creator:
-\"\"\"{description}\"\"\"
-
-Use the brief above to infer the following and apply them throughout the carousel:
-- Target audience
-- Tone and style
-- Level of technical detail
-- Visual emphasis (data-heavy vs concept-heavy)
+Inferred from the intent above, apply these attributes:
+- Audience level: expert, practitioner, or general public
+- Slide density: text-heavy explanation vs minimal punchy bullets
+- Narrative arc: problem → solution → evidence → takeaway, or top-N insights list
+- Visual emphasis: data/stats, diagrams hints, or quotes
 
 {context}
 
-Return ONLY a JSON object with this exact structure:
-{{
-  "slides": [
-    {{"index": 1, "type": "cover",   "heading": "Main title here",   "body": "Subtitle or hook line", "speaker_note": "What to say here"}},
-    {{"index": 2, "type": "finding", "heading": "Key finding title", "body": "Explanation of finding", "speaker_note": "What to say here"}},
-    {{"index": 3, "type": "method",  "heading": "Methodology",       "body": "How they did it",       "speaker_note": "What to say here"}},
-    {{"index": 4, "type": "stat",    "heading": "Key statistic",     "body": "The number and context","speaker_note": "What to say here"}},
-    {{"index": 5, "type": "quote",   "heading": "Notable quote",     "body": "Quote from the paper",  "speaker_note": "What to say here"}},
-    {{"index": 6, "type": "cta",     "heading": "Call to action",    "body": "Follow for more research breakdowns", "speaker_note": "What to say here"}}
-  ],
-  "title": "carousel title",
-  "subtitle": "carousel subtitle"
-}}
+Slide type rules — you MUST use exactly these types, in this order:
+  1. First slide: type = "cover"  (title + subtitle hook)
+  2-6. Middle slides: type = "finding" (key insight), "method" (how it works),
+       "stat" (a number/result), or "quote" (a direct insight worth highlighting)
+  Last slide: type = "cta"  (what the reader should do next)
 
-STRICT RULES for slide types:
-- The FIRST slide MUST be type "cover" — no exceptions
-- The LAST slide MUST be type "cta" — no exceptions
-- Middle slides use ONLY these types: finding, method, stat, quote
-- Create 6-8 slides total
-- Every slide MUST include the "type" field
-- Keep each slide concise — headings under 10 words, body under 30 words
-- No markdown, no extra text outside the JSON"""
+Each slide must have:
+  - type: one of cover | finding | method | stat | quote | cta
+  - title: short headline (max 8 words)
+  - body: 2-4 bullet points or 2 short sentences
+  - visual_hint: one sentence describing what image/graphic would work here
+
+Create 6-8 slides total. First must be cover, last must be cta.
+
+Return ONLY a JSON object — no markdown, no extra text:
+{{"slides": [{{"type": "cover", "title": "...", "body": "...", "visual_hint": "..."}}], "hashtags": ["..."]}}"""
 
 _STUDY_OUTLINE_PROMPT = """You are analyzing the following research paper to create a structured learning plan.
 
@@ -283,6 +257,14 @@ class OpenAIProvider(LLMProvider):
         return response.choices[0].message.content or ""
 
     async def _with_retry(self, messages: list[dict], max_tokens: int = 2048) -> str:
+        """
+        Acquire a rate-limit token, then run the blocking call in executor
+        with exponential backoff retry.
+
+        Rate limiter runs BEFORE the first attempt and before each retry
+        so bursts of calls (e.g. Technical analysis, 5 sections) are
+        spaced correctly and don't cascade into provider-side 429s.
+        """
         loop     = asyncio.get_running_loop()
         last_exc = None
         for attempt in range(1, cfg.MAX_RETRIES + 1):
@@ -335,39 +317,29 @@ class OpenAIProvider(LLMProvider):
 
     # ── Social ────────────────────────────────────────────────────────────────
 
-    async def generate_twitter_thread(
-        self, context: str, title: str, description: str
-    ) -> dict:
+    async def generate_twitter_thread(self, context, title, description) -> dict:
         safe_context = sanitize_context(context)
         prompt = _TWITTER_PROMPT.format(
-            title=title,
-            description=description,
-            context=safe_context,
+            title=title, description=description, context=safe_context
         )
         raw = await self._with_retry(self._build_messages(self.SYSTEM_PROMPT, prompt))
         return parse_json_response(raw)
 
-    async def generate_linkedin_post(
-        self, context: str, title: str, description: str
-    ) -> dict:
+    async def generate_linkedin_post(self, context, title, description) -> dict:
         safe_context = sanitize_context(context)
         prompt = _LINKEDIN_PROMPT.format(
-            title=title,
-            description=description,
-            context=safe_context,
+            title=title, description=description, context=safe_context
         )
         raw = await self._with_retry(self._build_messages(self.SYSTEM_PROMPT, prompt))
         return parse_json_response(raw)
 
     async def generate_carousel_content(
-        self, context: str, title: str, description: str, color_scheme: str
+        self, context, title, description, color_scheme
     ) -> dict:
         safe_context = sanitize_context(context)
         prompt = _CAROUSEL_PROMPT.format(
-            title=title,
-            description=description,
-            color_scheme=color_scheme,
-            context=safe_context,
+            title=title, description=description,
+            color_scheme=color_scheme, context=safe_context,
         )
         raw = await self._with_retry(self._build_messages(self.SYSTEM_PROMPT, prompt))
         return parse_json_response(raw)
