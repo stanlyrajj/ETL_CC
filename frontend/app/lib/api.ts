@@ -1,8 +1,12 @@
 // api.ts — Typed client for all ResearchRAG backend endpoints.
+// Every function throws an Error with a descriptive message on failure.
 
 const BASE = '/api'
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json', ...options.headers },
     ...options,
@@ -132,7 +136,8 @@ export async function processPapers(
 }
 
 export async function uploadPaper(
-  file: File, topic: string
+  file: File,
+  topic: string
 ): Promise<{ paper: Paper; message: string }> {
   const fd = new FormData()
   fd.append('file', file)
@@ -170,9 +175,15 @@ export async function listSessions(): Promise<{ sessions: Session[] }> {
 }
 
 export async function createSession(params: {
-  paper_id: string; topic?: string; level?: string; mode: ChatMode
+  paper_id: string
+  topic?:   string
+  level?:   string
+  mode:     ChatMode
 }): Promise<{ session: SessionDetail }> {
-  return request('/chat/sessions', { method: 'POST', body: JSON.stringify(params) })
+  return request('/chat/sessions', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  })
 }
 
 export async function getSession(
@@ -182,7 +193,9 @@ export async function getSession(
 }
 
 export async function sendMessage(
-  sessionId: string, message: string, level: string
+  sessionId: string,
+  message: string,
+  level: string
 ): Promise<{ session_id: string; response: string; level: string }> {
   return request(`/chat/sessions/${sessionId}/message`, {
     method: 'POST',
@@ -191,7 +204,8 @@ export async function sendMessage(
 }
 
 export async function updateLevel(
-  sessionId: string, level: string
+  sessionId: string,
+  level: string
 ): Promise<{ success: boolean }> {
   return request(`/chat/sessions/${sessionId}/level`, {
     method: 'PATCH',
@@ -223,10 +237,10 @@ export async function selectModel(
 // ── Generate ─────────────────────────────────────────────────────────────────
 
 export async function generateContent(params: {
-  paper_id:     string
-  platform:     'twitter' | 'linkedin' | 'carousel'
-  description:  string    // replaces style + tone
-  color_scheme?: string   // carousel only
+  paper_id: string
+  platform: 'twitter' | 'linkedin' | 'carousel'
+  description: string
+  color_scheme?: string
 }): Promise<{ queue_key: string; paper_id: string; platform: string; message: string }> {
   return request('/generate', {
     method: 'POST',
@@ -235,7 +249,8 @@ export async function generateContent(params: {
 }
 
 export async function generationHistory(
-  paperId: string, platform?: string
+  paperId: string,
+  platform?: string
 ): Promise<{ paper_id: string; items: SocialItem[] }> {
   const q = platform ? `?platform=${platform}` : ''
   return request(`/generate/history/${paperId}${q}`)

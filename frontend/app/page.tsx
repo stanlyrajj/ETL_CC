@@ -301,7 +301,7 @@ function StudyPanel({ paperId }: { paperId: string }) {
         <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--study-color)', marginBottom: '8px' }}>Study Mode</p>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-2)', maxWidth: '360px', lineHeight: 1.6 }}>The AI will analyze this paper and create a personalized learning plan for you. Review the plan, then learn step by step.</p>
       </div>
-      <button className="btn btn-primary" onClick={fetchOutline} style={{ background: 'var(--study-color)', minWidth: '200px' }}>Generate Learning Plan</button>
+      <button suppressHydrationWarning className="btn btn-primary" onClick={fetchOutline} style={{ background: 'var(--study-color)', minWidth: '200px' }}>Generate Learning Plan</button>
     </div>
   )
 
@@ -315,7 +315,7 @@ function StudyPanel({ paperId }: { paperId: string }) {
   if (phase === 'error') return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
       <div className="notice notice-error" style={{ maxWidth: '400px' }}>{error}</div>
-      <button className="btn btn-ghost" onClick={clearCache}>Try again</button>
+      <button suppressHydrationWarning className="btn btn-ghost" onClick={clearCache}>Try again</button>
     </div>
   )
 
@@ -340,8 +340,8 @@ function StudyPanel({ paperId }: { paperId: string }) {
         </div>
       </div>
       <div style={{ display: 'flex', gap: '10px' }}>
-        <button className="btn btn-primary btn-lg" onClick={startTeaching} style={{ background: 'var(--study-color)', flex: 1 }}>Begin Learning →</button>
-        <button className="btn btn-ghost" onClick={clearCache}>Regenerate</button>
+        <button suppressHydrationWarning className="btn btn-primary btn-lg" onClick={startTeaching} style={{ background: 'var(--study-color)', flex: 1 }}>Begin Learning →</button>
+        <button suppressHydrationWarning className="btn btn-ghost" onClick={clearCache}>Regenerate</button>
       </div>
     </div>
   )
@@ -378,11 +378,11 @@ function StudyPanel({ paperId }: { paperId: string }) {
         {error && <div className="notice notice-error" style={{ marginBottom: '12px' }}>{error}</div>}
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px' }}>
-          <button className="btn btn-ghost btn-sm" onClick={() => { if (currentSection > 0) { setCurrentSection(s => s - 1) } }} disabled={currentSection === 0}>← Previous</button>
+          <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={() => { if (currentSection > 0) { setCurrentSection(s => s - 1) } }} disabled={currentSection === 0}>← Previous</button>
           {flashcardsLoading
             ? <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-3)', fontSize: '0.875rem' }}><Spinner size="spinner-sm" /><span>Generating flashcards…</span></div>
             : (
-              <button className="btn btn-primary" onClick={nextSection}
+              <button suppressHydrationWarning className="btn btn-primary" onClick={nextSection}
                 disabled={sectionLoading && !sections[currentSection + 1]}
                 style={{ background: 'var(--study-color)' }}>
                 {isLastSection ? 'Finish & Get Flashcards →' : 'Next Section →'}
@@ -405,7 +405,7 @@ function StudyPanel({ paperId }: { paperId: string }) {
         </div>
         <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginBottom: '20px' }}>
           {flashcards.map((_, i) => (
-            <button key={i} onClick={() => { setCardIndex(i); setFlipped(false) }}
+            <button suppressHydrationWarning key={i} onClick={() => { setCardIndex(i); setFlipped(false) }}
               style={{ width: '8px', height: '8px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: i === cardIndex ? 'var(--study-color)' : 'var(--border)', transition: 'background 0.15s', padding: 0 }} />
           ))}
         </div>
@@ -423,9 +423,9 @@ function StudyPanel({ paperId }: { paperId: string }) {
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px' }}>
-          <button className="btn btn-ghost btn-sm" onClick={prevCard} disabled={cardIndex === 0}>← Previous</button>
-          <button className="btn btn-ghost btn-sm" onClick={clearCache}>Restart</button>
-          <button className="btn btn-ghost btn-sm" onClick={nextCard} disabled={cardIndex === flashcards.length - 1}>Next →</button>
+          <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={prevCard} disabled={cardIndex === 0}>← Previous</button>
+          <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={clearCache}>Restart</button>
+          <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={nextCard} disabled={cardIndex === flashcards.length - 1}>Next →</button>
         </div>
       </div>
     )
@@ -527,14 +527,14 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
           ))}
         </div>
       </div>
-      <button className="btn btn-primary btn-lg" onClick={startAnalysis} style={{ background: 'var(--technical-color)', minWidth: '220px' }}>Analyze Paper</button>
+      <button suppressHydrationWarning className="btn btn-primary btn-lg" onClick={startAnalysis} style={{ background: 'var(--technical-color)', minWidth: '220px' }}>Analyze Paper</button>
     </div>
   )
 
   if (phase === 'error') return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
       <div className="notice notice-error" style={{ maxWidth: '400px' }}>{error}</div>
-      <button className="btn btn-ghost" onClick={clearCache}>Try again</button>
+      <button suppressHydrationWarning className="btn btn-ghost" onClick={clearCache}>Try again</button>
     </div>
   )
 
@@ -546,7 +546,7 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
           const done    = sections.some(s => s.key === def.key)
           const loading = loadingKey === def.key
           return (
-            <button key={def.key}
+            <button suppressHydrationWarning key={def.key}
               className={`technical-nav-item ${activeKey === def.key ? 'active' : ''} ${done ? 'done' : ''} ${loading ? 'loading' : ''}`}
               onClick={() => done && setActiveKey(def.key)} disabled={!done}
               style={{ cursor: done ? 'pointer' : 'default' }}>
@@ -559,7 +559,7 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
         })}
         {phase === 'done' && (
           <div style={{ padding: '12px 16px', marginTop: 'auto' }}>
-            <button className="btn btn-ghost btn-sm btn-full" onClick={clearCache} style={{ fontSize: '0.75rem' }}>Re-analyze</button>
+            <button suppressHydrationWarning className="btn btn-ghost btn-sm btn-full" onClick={clearCache} style={{ fontSize: '0.75rem' }}>Re-analyze</button>
           </div>
         )}
         {phase === 'analyzing' && (
@@ -706,7 +706,7 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {models.map(m => (
-                <button key={m.id} onClick={() => handleModelSelect(m.id)} disabled={modelSwitching}
+                <button suppressHydrationWarning key={m.id} onClick={() => handleModelSelect(m.id)} disabled={modelSwitching}
                   style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', padding: '10px 12px', borderRadius: 'var(--radius)', border: `1px solid ${activeModel === m.id ? 'var(--accent)' : 'var(--border)'}`, background: activeModel === m.id ? 'var(--accent-glow)' : 'var(--bg)', cursor: modelSwitching ? 'not-allowed' : 'pointer', textAlign: 'left', transition: 'all 0.15s', opacity: modelSwitching ? 0.6 : 1 }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
@@ -724,7 +724,7 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
 
         <div style={{ display: 'flex', background: 'var(--bg-2)', borderRadius: 'var(--radius)', padding: '3px', marginBottom: '20px', border: '1px solid var(--border)' }}>
           {(['search', 'upload'] as const).map(m => (
-            <button key={m} onClick={() => { setMode(m); setError('') }}
+            <button suppressHydrationWarning key={m} onClick={() => { setMode(m); setError('') }}
               style={{ flex: 1, padding: '7px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: '0.875rem', fontWeight: 500, transition: 'all 0.15s', background: mode === m ? 'var(--bg-3)' : 'transparent', color: mode === m ? 'var(--text)' : 'var(--text-2)' }}>
               {m === 'search' ? 'Search papers' : 'Upload PDF'}
             </button>
@@ -735,7 +735,7 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
           <form onSubmit={mode === 'search' ? handleSearch : handleUpload}>
             <div style={{ marginBottom: '16px' }}>
               <label className="label">{mode === 'search' ? 'Topic or keywords' : 'Topic label'}</label>
-              <input className={`input ${topicError ? 'error' : ''}`} value={topic} onChange={e => { setTopic(e.target.value); setError('') }} placeholder={mode === 'search' ? 'e.g. large language models, RAG' : 'e.g. transformer architecture'} maxLength={200} />
+              <input suppressHydrationWarning className={`input ${topicError ? 'error' : ''}`} value={topic} onChange={e => { setTopic(e.target.value); setError('') }} placeholder={mode === 'search' ? 'e.g. large language models, RAG' : 'e.g. transformer architecture'} maxLength={200} />
               {topicError && <p style={{ color: 'var(--error)', fontSize: '0.8125rem', marginTop: '4px' }}>{topicError}</p>}
             </div>
 
@@ -743,18 +743,18 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
                   <div><label className="label">Source</label>
-                    <select className="select" value={source} onChange={e => setSource(e.target.value as typeof source)}>
+                    <select suppressHydrationWarning className="select" value={source} onChange={e => setSource(e.target.value as typeof source)}>
                       <option value="both">arXiv + PubMed</option><option value="arxiv">arXiv only</option><option value="pubmed">PubMed only</option>
                     </select>
                   </div>
                   <div><label className="label">Number of results</label>
-                    <select className="select" value={limit} onChange={e => setLimit(Number(e.target.value))}>
+                    <select suppressHydrationWarning className="select" value={limit} onChange={e => setLimit(Number(e.target.value))}>
                       {[5, 10, 20, 30, 50].map(n => <option key={n} value={n}>{n} papers</option>)}
                     </select>
                   </div>
                 </div>
                 <div style={{ marginBottom: '20px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-                  <button type="button" onClick={() => setShowRefine(o => !o)}
+                  <button suppressHydrationWarning type="button" onClick={() => setShowRefine(o => !o)}
                     style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--bg-3)', border: 'none', cursor: 'pointer', color: 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{ fontWeight: 500 }}>Refine results</span>
@@ -765,26 +765,26 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
                   {showRefine && (
                     <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                       <div><label className="label">Sort by</label>
-                        <select className="select" value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}>
+                        <select suppressHydrationWarning className="select" value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}>
                           <option value="date">Most recent</option><option value="relevance">Most relevant</option>
                         </select>
                       </div>
                       {source !== 'pubmed' && (
                         <div><label className="label">arXiv category</label>
-                          <select className="select" value={category} onChange={e => setCategory(e.target.value)}>
+                          <select suppressHydrationWarning className="select" value={category} onChange={e => setCategory(e.target.value)}>
                             {ARXIV_CATEGORIES.map((c, i) => <option key={i} value={c.value} disabled={c.disabled as boolean | undefined}>{c.label}</option>)}
                           </select>
                         </div>
                       )}
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                        <div><label className="label">From date</label><input className="input" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
-                        <div><label className="label">To date</label><input className="input" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
+                        <div><label className="label">From date</label><input suppressHydrationWarning className="input" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
+                        <div><label className="label">To date</label><input suppressHydrationWarning className="input" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
                       </div>
                       <div><label className="label">Must include keyword</label>
-                        <input className="input" value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="e.g. interpretability, fine-tuning" />
+                        <input suppressHydrationWarning className="input" value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="e.g. interpretability, fine-tuning" />
                       </div>
                       {activeFilters.length > 0 && (
-                        <button type="button" className="btn btn-ghost btn-sm"
+                        <button suppressHydrationWarning type="button" className="btn btn-ghost btn-sm"
                           onClick={() => { setSortBy('date'); setCategory(''); setDateFrom(''); setDateTo(''); setKeyword('') }}>
                           Clear filters
                         </button>
@@ -804,12 +804,12 @@ function SearchView({ onResults }: { onResults: (papers: PaperPreview[]) => void
                   <p style={{ fontSize: '0.875rem', color: file ? 'var(--text)' : 'var(--text-2)' }}>{file ? file.name : 'Click to select a PDF'}</p>
                   {file && <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: '2px' }}>{(file.size / 1024 / 1024).toFixed(1)} MB</p>}
                 </div>
-                <input ref={fileRef} type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleFile} />
+                <input suppressHydrationWarning ref={fileRef} type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleFile} />
               </div>
             )}
 
             {error && <div className="notice notice-error" style={{ marginBottom: '16px' }}>{error}</div>}
-            <button type="submit" className="btn btn-primary btn-full btn-lg" disabled={loading}>
+            <button suppressHydrationWarning type="submit" className="btn btn-primary btn-full btn-lg" disabled={loading}>
               {loading ? <><Spinner />{mode === 'search' ? 'Searching…' : 'Uploading…'}</> : <>{mode === 'search' ? <IconSearch /> : <IconUpload />}{mode === 'search' ? 'Search papers' : 'Upload & process'}</>}
             </button>
           </form>
@@ -858,7 +858,7 @@ function PaperSelectionCard({ paper, selected, onToggle }: {
     <div className="card fade-in" style={{ marginBottom: '12px', border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, background: selected ? 'rgba(16,185,129,0.04)' : 'var(--bg-2)', transition: 'all 0.15s' }}>
       <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
         <div style={{ flexShrink: 0, paddingTop: '2px' }}>
-          <button onClick={onToggle}
+          <button suppressHydrationWarning onClick={onToggle}
             style={{ width: '22px', height: '22px', borderRadius: '6px', border: `2px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, background: selected ? 'var(--accent)' : 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.15s' }}>
             {selected && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
           </button>
@@ -884,13 +884,13 @@ function PaperSelectionCard({ paper, selected, onToggle }: {
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
             {/* On-demand summarize button — only shown when abstract exists and no summary yet */}
             {paper.abstract && !summary && (
-              <button type="button" onClick={handleSummarize} disabled={summaryLoading}
+              <button suppressHydrationWarning type="button" onClick={handleSummarize} disabled={summaryLoading}
                 style={{ fontSize: '0.8125rem', color: 'var(--accent)', background: 'none', border: 'none', cursor: summaryLoading ? 'default' : 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '4px' }}>
                 {summaryLoading ? <><Spinner size="spinner-sm" />Summarising…</> : <>✦ AI Summary</>}
               </button>
             )}
             {paper.abstract && (
-              <button type="button" onClick={() => setShowFullAbstract(o => !o)}
+              <button suppressHydrationWarning type="button" onClick={() => setShowFullAbstract(o => !o)}
                 style={{ fontSize: '0.8125rem', color: 'var(--text-3)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
                 {showFullAbstract ? 'Hide abstract' : 'Show abstract'}
               </button>
@@ -938,9 +938,9 @@ function SelectionView({ papers, onSelect, onBack }: {
               <p style={{ color: 'var(--text-3)', fontSize: '0.875rem' }}>{papers.length} result{papers.length !== 1 ? 's' : ''} · {selected.size} selected</p>
             </div>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <button className="btn btn-ghost btn-sm" onClick={onBack}>← New search</button>
-              <button className="btn btn-ghost btn-sm" onClick={selected.size === papers.length ? deselectAll : selectAll}>{selected.size === papers.length ? 'Deselect all' : 'Select all'}</button>
-              <button className="btn btn-primary" onClick={handleProcess} disabled={selected.size === 0 || loading} style={{ minWidth: '140px' }}>
+              <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={onBack}>← New search</button>
+              <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={selected.size === papers.length ? deselectAll : selectAll}>{selected.size === papers.length ? 'Deselect all' : 'Select all'}</button>
+              <button suppressHydrationWarning className="btn btn-primary" onClick={handleProcess} disabled={selected.size === 0 || loading} style={{ minWidth: '140px' }}>
                 {loading ? <><Spinner />Starting…</> : selected.size === 0 ? 'Select papers' : `Process ${selected.size} paper${selected.size !== 1 ? 's' : ''}`}
               </button>
             </div>
@@ -1031,7 +1031,7 @@ function ProcessingView({ papers, onDone }: { papers: Paper[]; onDone: (processe
         {allDone && (
           <div style={{ textAlign: 'center', marginTop: '24px' }} className="fade-in">
             <p style={{ color: 'var(--text-2)', marginBottom: '12px', fontSize: '0.9375rem' }}>{list.filter(p => (p.sseStage ?? p.pipeline_stage) === 'processed').length} paper(s) ready — opening chat…</p>
-            <button className="btn btn-ghost" onClick={() => onDone(Object.values(statuses))}>Continue now</button>
+            <button suppressHydrationWarning className="btn btn-ghost" onClick={() => onDone(Object.values(statuses))}>Continue now</button>
           </div>
         )}
       </div>
@@ -1039,14 +1039,36 @@ function ProcessingView({ papers, onDone }: { papers: Paper[]; onDone: (processe
   )
 }
 
+// ── Per-platform description presets — shown as quick-fill chips ─────────────
+const DESCRIPTION_PRESETS: Record<Platform, { label: string; value: string }[]> = {
+  twitter: [
+    { label: 'Explain to beginners',    value: 'Explain this paper to a general tech audience with no prior knowledge, using simple analogies and a friendly tone' },
+    { label: 'Viral hook',              value: 'Write a high-engagement thread with a bold surprising stat as the hook, casual voice, and a punchy conclusion' },
+    { label: 'Expert thread',           value: 'Write a technical thread for ML practitioners, assume domain knowledge, use precise terminology, no fluff' },
+    { label: 'Storytelling',            value: 'Tell the story of this research — the problem, the struggle, the breakthrough — as a first-person narrative' },
+  ],
+  linkedin: [
+    { label: 'Practitioner insight',    value: 'Write a professional post for software engineers and data scientists explaining the practical implications of this work' },
+    { label: 'Thought leadership',      value: 'Write an analytical post positioning the author as a domain expert, with a strong opinion on what this paper means for the field' },
+    { label: 'Accessible summary',      value: 'Write a conversational post for a general professional audience, avoid jargon, focus on the real-world impact' },
+    { label: 'Short & punchy',          value: 'Write a short punchy LinkedIn post with bold single-line paragraphs, under 150 words, strong hook, end with a question' },
+  ],
+  carousel: [
+    { label: 'ELI5 explainer',          value: 'Create a beginner-friendly carousel that explains the paper step by step using plain language and relatable analogies' },
+    { label: 'Top insights',            value: 'Create a "Top N insights from this paper" carousel with one key finding per slide, minimal text, stat-heavy' },
+    { label: 'Technical breakdown',     value: 'Create a technical carousel for engineers — cover the architecture, method, results, and how to apply it in practice' },
+    { label: 'Problem → Solution',      value: 'Structure the carousel as: here is the problem → existing approaches fail because → what this paper does differently → key results → takeaway' },
+  ],
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Generation Panel
 // ─────────────────────────────────────────────────────────────────────────────
- 
+
 function GenerationPanel({ paperId }: { paperId: string }) {
   const [open, setOpen]               = useState(true)
   const [platform, setPlatform]       = useState<Platform>('twitter')
-  const [description, setDescription] = useState('')
+  const [description, setDescription] = useState(DESCRIPTION_PRESETS.twitter[0].value)
   const [colorScheme, setColorScheme] = useState('light')
   const [loading, setLoading]         = useState(false)
   const [error, setError]             = useState('')
@@ -1056,44 +1078,27 @@ function GenerationPanel({ paperId }: { paperId: string }) {
   const [shareLinks, setShareLinks]   = useState<{ linkedin_url: string; twitter_url: string } | null>(null)
   const esRef = useRef<EventSource | null>(null)
 
-  useEffect(() => { setResult(null); setError(''); setExportUrl(''); setShareLinks(null) }, [platform])
+  // When platform changes reset description to first preset for that platform
+  useEffect(() => {
+    setDescription(DESCRIPTION_PRESETS[platform][0].value)
+    setResult(null); setError(''); setExportUrl(''); setShareLinks(null)
+  }, [platform])
   useEffect(() => () => { esRef.current?.close() }, [])
 
-  const placeholders: Record<Platform, string> = {
-    twitter:  'e.g. "Punchy breakdown for ML engineers, heavy on the data, 1-2 emojis per tweet"',
-    linkedin: 'e.g. "Thought-leadership post for tech executives, professional tone, no emojis"',
-    carousel: 'e.g. "Visual summary for a non-technical audience, keep it simple and engaging"',
-  }
-
   async function handleGenerate() {
+    if (!description.trim()) { setError('Please describe how you want the content generated.'); return }
     setLoading(true); setError(''); setResult(null); setExportUrl(''); setShareLinks(null)
-    const desc = description.trim() || 'Educational and accessible, suitable for a general professional audience.'
     try {
-      const res = await generateContent({
-        paper_id: paperId, platform,
-        description: desc,
-        color_scheme: colorScheme,
-      })
-      const qk = res.queue_key
+      const res = await generateContent({ paper_id: paperId, platform, description: description.trim(), color_scheme: colorScheme })
+      const qk  = res.queue_key
       await new Promise<void>((resolve, reject) => {
         const es = new EventSource(`${BACKEND}/api/generate/${qk}/progress`)
         esRef.current = es
         es.addEventListener('completed', async () => {
-          try {
-            const hist = await generationHistory(paperId, platform)
-            const latest = hist.items[0] ?? null
-            setResult(latest)
-            if (latest) { const links = await getShareLinks(latest.id); setShareLinks(links) }
-          } catch { /* ignore */ }
+          try { const hist = await generationHistory(paperId, platform); const latest = hist.items[0] ?? null; setResult(latest); if (latest) { const links = await getShareLinks(latest.id); setShareLinks(links) } } catch { /* ignore */ }
         })
-        es.addEventListener('done', (e: MessageEvent) => {
-          try { const d = JSON.parse(e.data); if (!d.success && d.error) reject(new Error(d.error)); else resolve() } catch { resolve() }
-          es.close()
-        })
-        es.addEventListener('failed', (e: MessageEvent) => {
-          try { reject(new Error(JSON.parse(e.data).error ?? 'Generation failed')) } catch { reject(new Error('Generation failed')) }
-          es.close()
-        })
+        es.addEventListener('done', (e: MessageEvent) => { try { const d = JSON.parse(e.data); if (!d.success && d.error) reject(new Error(d.error)); else resolve() } catch { resolve() } es.close() })
+        es.addEventListener('failed', (e: MessageEvent) => { try { reject(new Error(JSON.parse(e.data).error ?? 'Generation failed')) } catch { reject(new Error('Generation failed')) } es.close() })
         es.onerror = () => { reject(new Error('SSE connection lost')); es.close() }
       })
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Generation failed.') }
@@ -1103,10 +1108,8 @@ function GenerationPanel({ paperId }: { paperId: string }) {
   async function handleExport() {
     if (!result) return
     setExporting(true)
-    try {
-      const res = await exportCarousel(result.id)
-      setExportUrl(`/api/generate/${result.id}/download?filename=${encodeURIComponent(res.filename)}`)
-    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Export failed.') }
+    try { const res = await exportCarousel(result.id); setExportUrl(`/api/generate/${result.id}/download?filename=${encodeURIComponent(res.filename)}`) }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : 'Export failed.') }
     finally { setExporting(false) }
   }
 
@@ -1115,139 +1118,102 @@ function GenerationPanel({ paperId }: { paperId: string }) {
     try {
       if (platform === 'twitter') {
         const tweets: string[] = JSON.parse(result.content)
-        return (
-          <div>
-            {tweets.map((t, i) => (
-              <div key={i} style={{ padding: '10px 12px', borderBottom: i < tweets.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '0.875rem', lineHeight: 1.6 }}>
-                <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', marginRight: '8px' }}>{i + 1}</span>{t}
-              </div>
-            ))}
-            {result.hashtags?.length > 0 && (
-              <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', background: 'var(--accent-glow)', padding: '2px 8px', borderRadius: '12px' }}>{h}</span>)}
-              </div>
-            )}
-          </div>
-        )
+        return <div>{tweets.map((t, i) => <div key={i} style={{ padding: '10px 12px', borderBottom: i < tweets.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '0.875rem', lineHeight: 1.6 }}><span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', marginRight: '8px' }}>{i + 1}</span>{t}</div>)}{result.hashtags?.length > 0 && <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>{result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', background: 'var(--accent-glow)', padding: '2px 8px', borderRadius: '12px' }}>{h}</span>)}</div>}</div>
       }
-      if (platform === 'linkedin') {
-        // Try to parse inferred_attributes from the stored content
-        // LinkedIn content is stored as plain text, so we display it directly
-        return (
-          <div>
-            <div style={{ padding: '12px', fontSize: '0.875rem', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-              {result.content}
-            </div>
-            {result.hashtags?.length > 0 && (
-              <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>{h}</span>)}
-              </div>
-            )}
-          </div>
-        )
-      }
+      if (platform === 'linkedin') return <div style={{ padding: '12px', fontSize: '0.875rem', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{result.content}{result.hashtags?.length > 0 && <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>{result.hashtags.map(h => <span key={h} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)' }}>{h}</span>)}</div>}</div>
       if (platform === 'carousel') {
         const slides: Array<{ type: string; title: string; body: string }> = JSON.parse(result.content)
-        return (
-          <div>
-            {slides.map((s, i) => (
-              <div key={i} style={{ padding: '10px 12px', borderBottom: i < slides.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-3)', background: 'var(--bg-3)', padding: '1px 6px', borderRadius: '4px' }}>{s.type}</span>
-                  <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>{s.title}</span>
-                </div>
-                <p style={{ fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.5 }}>{s.body}</p>
-              </div>
-            ))}
-          </div>
-        )
+        const typeColors: Record<string, string> = { cover: 'var(--accent)', cta: 'var(--study-color)', stat: 'var(--technical-color)', quote: '#a78bfa', finding: 'var(--text-3)', method: 'var(--text-3)' }
+        return <div>{slides.map((s, i) => <div key={i} style={{ padding: '10px 12px', borderBottom: i < slides.length - 1 ? '1px solid var(--border)' : 'none' }}><div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: typeColors[s.type] ?? 'var(--text-3)', background: 'var(--bg-3)', padding: '1px 6px', borderRadius: '4px', border: `1px solid ${typeColors[s.type] ?? 'var(--border)'}` }}>{s.type}</span><span style={{ fontWeight: 600, fontSize: '0.875rem' }}>{s.title}</span></div><p style={{ fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.5 }}>{s.body}</p></div>)}</div>
       }
     } catch { return <div style={{ padding: '12px', fontSize: '0.875rem' }}>{result.content}</div> }
   }
 
+  const platformMeta: Record<Platform, { icon: string; hint: string }> = {
+    twitter:  { icon: '𝕏', hint: '6–8 tweets · 280 chars each' },
+    linkedin: { icon: 'in', hint: '150–300 word post · hook + CTA' },
+    carousel: { icon: '▤',  hint: '6–8 slides · cover → findings → CTA' },
+  }
+
   return (
     <div style={{ borderTop: '1px solid var(--border)' }}>
-      <button onClick={() => setOpen(o => !o)}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text)', borderBottom: open ? '1px solid var(--border)' : 'none' }}>
+      <button suppressHydrationWarning onClick={() => setOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text)', borderBottom: open ? '1px solid var(--border)' : 'none' }}>
         <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generate content</span>
         <IconChevron open={open} />
       </button>
-
       {open && (
         <div style={{ padding: '14px 16px' }}>
 
-          {/* Platform selector */}
+          {/* Platform tabs */}
           <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
             {(['twitter', 'linkedin', 'carousel'] as Platform[]).map(p => (
-              <button key={p} onClick={() => setPlatform(p)}
-                style={{ flex: 1, padding: '6px', borderRadius: 'var(--radius)', border: `1px solid ${platform === p ? 'var(--accent)' : 'var(--border)'}`, background: platform === p ? 'var(--accent-glow)' : 'transparent', color: platform === p ? 'var(--accent)' : 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', cursor: 'pointer', transition: 'all 0.15s', fontWeight: 500 }}>
-                {p.charAt(0).toUpperCase() + p.slice(1)}
+              <button suppressHydrationWarning key={p} onClick={() => setPlatform(p)}
+                style={{ flex: 1, padding: '8px 6px', borderRadius: 'var(--radius)', border: `1px solid ${platform === p ? 'var(--accent)' : 'var(--border)'}`, background: platform === p ? 'var(--accent-glow)' : 'transparent', color: platform === p ? 'var(--accent)' : 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', cursor: 'pointer', transition: 'all 0.15s', fontWeight: 500 }}>
+                <div style={{ marginBottom: '1px' }}>{platformMeta[p].icon}</div>
+                <div>{p.charAt(0).toUpperCase() + p.slice(1)}</div>
+                {platform === p && <div style={{ fontSize: '0.6875rem', color: 'var(--accent)', opacity: 0.8, marginTop: '1px' }}>{platformMeta[p].hint}</div>}
               </button>
             ))}
           </div>
 
-          {/* Content brief */}
+          {/* Description field */}
           <div style={{ marginBottom: '10px' }}>
-            <label className="label">
-              Content brief
-              <span style={{ fontWeight: 400, color: 'var(--text-3)', marginLeft: '6px' }}>— optional</span>
-            </label>
-            <textarea
-              className="textarea"
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <label className="label" style={{ margin: 0 }}>How should this be written?</label>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>{description.length}/300</span>
+            </div>
+            <textarea suppressHydrationWarning
+              className="input"
               value={description}
-              onChange={e => setDescription(e.target.value)}
-              placeholder={placeholders[platform]}
-              maxLength={500}
-              style={{ minHeight: '72px', resize: 'vertical', fontSize: '0.8125rem' }}
+              onChange={e => setDescription(e.target.value.slice(0, 300))}
+              placeholder="e.g. Write a technical thread for ML engineers, assume domain knowledge, focus on the novel architecture"
+              rows={3}
+              style={{ resize: 'vertical', minHeight: '70px', fontFamily: 'var(--font-sans)', lineHeight: 1.5 }}
             />
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: '4px', lineHeight: 1.4 }}>
-              Describe your audience, tone, and style in plain English. The AI infers everything else.
-            </p>
           </div>
 
-          {/* Color scheme — carousel only */}
+          {/* Quick-fill presets */}
+          <div style={{ marginBottom: '12px' }}>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginBottom: '6px' }}>Quick presets</p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+              {DESCRIPTION_PRESETS[platform].map(p => (
+                <button suppressHydrationWarning key={p.label} onClick={() => setDescription(p.value)}
+                  style={{ fontSize: '0.75rem', padding: '3px 10px', borderRadius: '12px', border: `1px solid ${description === p.value ? 'var(--accent)' : 'var(--border)'}`, background: description === p.value ? 'var(--accent-glow)' : 'var(--bg-2)', color: description === p.value ? 'var(--accent)' : 'var(--text-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', transition: 'all 0.15s', whiteSpace: 'nowrap' }}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Carousel-only: color scheme */}
           {platform === 'carousel' && (
-            <div style={{ marginBottom: '10px' }}>
+            <div style={{ marginBottom: '12px' }}>
               <label className="label">Color scheme</label>
-              <select className="select" value={colorScheme} onChange={e => setColorScheme(e.target.value)}>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-                <option value="bold">Bold</option>
-              </select>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {(['light', 'dark', 'bold'] as const).map(s => (
+                  <button suppressHydrationWarning key={s} onClick={() => setColorScheme(s)}
+                    style={{ flex: 1, padding: '6px', borderRadius: 'var(--radius)', border: `1px solid ${colorScheme === s ? 'var(--accent)' : 'var(--border)'}`, background: colorScheme === s ? 'var(--accent-glow)' : 'var(--bg-2)', color: colorScheme === s ? 'var(--accent)' : 'var(--text-2)', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', cursor: 'pointer', transition: 'all 0.15s', fontWeight: 500, textTransform: 'capitalize' }}>
+                    {s}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
           {error && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{error}</div>}
-
-          <button className="btn btn-primary btn-full" onClick={handleGenerate} disabled={loading} style={{ marginBottom: '12px' }}>
-            {loading ? <><Spinner />Generating…</> : 'Generate'}
-          </button>
+          <button suppressHydrationWarning className="btn btn-primary btn-full" onClick={handleGenerate} disabled={loading} style={{ marginBottom: '12px' }}>{loading ? <><Spinner />Generating…</> : 'Generate'}</button>
 
           {result && (
             <div className="fade-in" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', marginBottom: '10px' }}>
-              <div style={{ background: 'var(--bg-3)', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-2)' }}>Preview</span>
-              </div>
-              <div style={{ background: 'var(--bg-2)', maxHeight: '260px', overflowY: 'auto' }}>
-                {renderPreview()}
-              </div>
+              <div style={{ background: 'var(--bg-3)', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-2)' }}>Preview</span></div>
+              <div style={{ background: 'var(--bg-2)', maxHeight: '260px', overflowY: 'auto' }}>{renderPreview()}</div>
             </div>
           )}
-
           {result && (
             <div className="fade-in" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {platform === 'carousel' && (
-                <button className="btn btn-ghost btn-sm" onClick={handleExport} disabled={exporting}>
-                  {exporting ? <><Spinner size="spinner-sm" />Exporting…</> : <><IconDownload />Export PDF</>}
-                </button>
-              )}
+              {platform === 'carousel' && <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={handleExport} disabled={exporting}>{exporting ? <><Spinner size="spinner-sm" />Exporting…</> : <><IconDownload />Export PDF</>}</button>}
               {exportUrl && <a href={exportUrl} download className="btn btn-ghost btn-sm"><IconDownload />Download PDF</a>}
-              {shareLinks && (
-                <>
-                  <a href={shareLinks.linkedin_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />LinkedIn</a>
-                  <a href={shareLinks.twitter_url}  target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />Twitter/X</a>
-                </>
-              )}
+              {shareLinks && (<><a href={shareLinks.linkedin_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />LinkedIn</a><a href={shareLinks.twitter_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm"><IconShare />Twitter/X</a></>)}
             </div>
           )}
         </div>
@@ -1292,7 +1258,7 @@ function FollowUpSuggestions({ lastResponse, onSelect, enabled }: {
       </div>
       {loading
         ? <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Spinner size="spinner-sm" /><span style={{ fontSize: '0.8125rem', color: 'var(--text-3)' }}>Thinking…</span></div>
-        : <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>{questions.map((q, i) => <button key={i} onClick={() => onSelect(q)} style={{ textAlign: 'left', padding: '8px 12px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.4, transition: 'all 0.15s' }} onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text)' }} onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-2)' }}>{q}</button>)}</div>
+        : <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>{questions.map((q, i) => <button suppressHydrationWarning key={i} onClick={() => onSelect(q)} style={{ textAlign: 'left', padding: '8px 12px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: '0.8125rem', color: 'var(--text-2)', lineHeight: 1.4, transition: 'all 0.15s' }} onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text)' }} onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-2)' }}>{q}</button>)}</div>
       }
     </div>
   )
@@ -1326,7 +1292,7 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
           <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', flexShrink: 0 }} />
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', letterSpacing: '0.08em' }}>RESEARCHRAG</span>
         </div>
-        <button className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>+ New search</button>
+        <button suppressHydrationWarning className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>+ New search</button>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
         {sessions.length === 0 && <p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', padding: '16px 8px', textAlign: 'center', lineHeight: 1.6 }}>No sessions yet.<br />Search for a paper to get started.</p>}
@@ -1342,7 +1308,7 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
                 <div key={s.session_id} style={{ position: 'relative', borderRadius: 'var(--radius)', marginBottom: '2px', background: isActive ? 'var(--bg-3)' : 'transparent', border: `1px solid ${isActive ? 'var(--border-2)' : 'transparent'}`, transition: 'all 0.12s' }}
                   onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-3)' }}
                   onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}>
-                  <button onClick={() => onSelect(s.session_id)} style={{ width: '100%', textAlign: 'left', padding: '9px 32px 9px 10px', background: 'transparent', border: 'none', cursor: 'pointer', borderRadius: 'var(--radius)' }}>
+                  <button suppressHydrationWarning onClick={() => onSelect(s.session_id)} style={{ width: '100%', textAlign: 'left', padding: '9px 32px 9px 10px', background: 'transparent', border: 'none', cursor: 'pointer', borderRadius: 'var(--radius)' }}>
                     <p style={{ fontSize: '0.875rem', fontWeight: isActive ? 600 : 400, color: isActive ? 'var(--text)' : 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '3px', lineHeight: 1.3 }}>{s.title || s.topic || s.session_id}</p>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <span style={{ fontSize: '0.6rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: modeColor, background: `${modeColor}22`, padding: '1px 5px', borderRadius: '8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{s.mode}</span>
@@ -1350,7 +1316,7 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
                     </div>
                   </button>
                   {!isConfirm && (
-                    <button onClick={e => { e.stopPropagation(); setConfirmDelete(s.session_id) }} title="Delete session"
+                    <button suppressHydrationWarning onClick={e => { e.stopPropagation(); setConfirmDelete(s.session_id) }} title="Delete session"
                       style={{ position: 'absolute', top: '50%', right: '6px', transform: 'translateY(-50%)', width: '22px', height: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-3)', borderRadius: '4px', opacity: isActive ? 1 : 0, transition: 'opacity 0.15s, color 0.15s' }}
                       onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--error)'; (e.currentTarget as HTMLButtonElement).style.opacity = '1' }}
                       onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-3)'; if (!isActive) (e.currentTarget as HTMLButtonElement).style.opacity = '0' }}>
@@ -1361,8 +1327,8 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
                     <div className="fade-in" style={{ position: 'absolute', inset: 0, background: 'var(--bg-3)', borderRadius: 'var(--radius)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 10px', gap: '6px', border: '1px solid var(--error-bg)' }}>
                       <span style={{ fontSize: '0.8125rem', color: 'var(--text-2)', whiteSpace: 'nowrap' }}>Delete?</span>
                       <div style={{ display: 'flex', gap: '4px' }}>
-                        <button onClick={e => { e.stopPropagation(); handleDelete(s.session_id) }} disabled={isDeleting} style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: 'none', background: 'var(--error)', color: '#fff', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>{isDeleting ? '…' : 'Yes'}</button>
-                        <button onClick={e => { e.stopPropagation(); setConfirmDelete(null) }} style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>No</button>
+                        <button suppressHydrationWarning onClick={e => { e.stopPropagation(); handleDelete(s.session_id) }} disabled={isDeleting} style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: 'none', background: 'var(--error)', color: '#fff', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>{isDeleting ? '…' : 'Yes'}</button>
+                        <button suppressHydrationWarning onClick={e => { e.stopPropagation(); setConfirmDelete(null) }} style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>No</button>
                       </div>
                     </div>
                   )}
@@ -1518,7 +1484,7 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
               {CHAT_MODES.map(m => {
                 const isActive = chatMode === m.id
                 return (
-                  <button key={m.id} onClick={() => handleModeSwitch(m.id)}
+                  <button suppressHydrationWarning key={m.id} onClick={() => handleModeSwitch(m.id)}
                     disabled={modeSwitching || !activePaper} title={m.description}
                     style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', cursor: modeSwitching || !activePaper ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-sans)', fontSize: '0.8125rem', fontWeight: 500, transition: 'all 0.15s', background: isActive ? m.color + '22' : 'transparent', color: isActive ? m.color : 'var(--text-3)', opacity: modeSwitching ? 0.6 : 1 }}>
                     {modeSwitching && isActive ? <Spinner size="spinner-sm" /> : m.label}
@@ -1531,7 +1497,7 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
             {chatMode === 'standard' && (
               <div style={{ display: 'flex', gap: '4px' }}>
                 {(['beginner', 'intermediate', 'advanced'] as Level[]).map(l => (
-                  <button key={l} onClick={() => handleLevelChange(l)}
+                  <button suppressHydrationWarning key={l} onClick={() => handleLevelChange(l)}
                     style={{ padding: '4px 10px', borderRadius: '20px', border: `1px solid ${level === l ? 'var(--accent)' : 'var(--border)'}`, background: level === l ? 'var(--accent-glow)' : 'transparent', color: level === l ? 'var(--accent)' : 'var(--text-3)', fontFamily: 'var(--font-sans)', fontSize: '0.75rem', cursor: 'pointer', transition: 'all 0.12s', fontWeight: 500 }}>
                     {l.charAt(0).toUpperCase() + l.slice(1)}
                   </button>
@@ -1541,14 +1507,14 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
 
             {/* Suggestions toggle — Chat mode only */}
             {chatMode === 'standard' && (
-              <button onClick={toggleSuggestions} title={suggestionsEnabled ? 'Disable follow-up suggestions' : 'Enable follow-up suggestions'}
+              <button suppressHydrationWarning onClick={toggleSuggestions} title={suggestionsEnabled ? 'Disable follow-up suggestions' : 'Enable follow-up suggestions'}
                 style={{ padding: '4px 8px', borderRadius: 'var(--radius)', border: `1px solid ${suggestionsEnabled ? 'var(--accent)' : 'var(--border)'}`, background: suggestionsEnabled ? 'var(--accent-glow)' : 'transparent', color: suggestionsEnabled ? 'var(--accent)' : 'var(--text-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', transition: 'all 0.15s' }}>
                 <IconSparkle />
                 {suggestionsEnabled ? 'Suggestions on' : 'Suggestions'}
               </button>
             )}
 
-            <button onClick={() => setGenerateOpen(o => !o)} className="btn btn-ghost btn-sm"
+            <button suppressHydrationWarning onClick={() => setGenerateOpen(o => !o)} className="btn btn-ghost btn-sm"
               style={{ borderColor: generateOpen ? 'var(--accent)' : undefined, color: generateOpen ? 'var(--accent)' : undefined }}>
               {generateOpen ? 'Hide generate' : 'Generate ✦'}
             </button>
@@ -1622,10 +1588,10 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
                 <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--bg-2)', flexShrink: 0 }}>
                   {chatError && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{chatError}</div>}
                   <form onSubmit={handleSend} style={{ display: 'flex', gap: '8px' }}>
-                    <input className="input" value={input} onChange={e => setInput(e.target.value)}
+                    <input suppressHydrationWarning className="input" value={input} onChange={e => setInput(e.target.value)}
                       placeholder={!activeSession ? 'Waiting for a session…' : 'Ask anything about this paper…'}
                       disabled={!activeSession || sending} maxLength={2000} style={{ flex: 1 }} />
-                    <button type="submit" className="btn btn-primary"
+                    <button suppressHydrationWarning type="submit" className="btn btn-primary"
                       disabled={!activeSession || !input.trim() || sending} style={{ flexShrink: 0 }}>
                       <IconSend />
                     </button>
