@@ -39,8 +39,7 @@ _VALID_PLATFORMS = ("twitter", "linkedin", "carousel")
 class GenerateRequest(BaseModel):
     paper_id:     str = Field(..., min_length=1)
     platform:     str = Field(...)
-    style:        str = Field("educational")
-    tone:         str = Field("conversational")
+    description:  str = Field("Write an educational post for a general tech audience")
     color_scheme: str = Field("light")
 
 
@@ -213,12 +212,12 @@ async def _run_generate(request: GenerateRequest, queue_key: str) -> None:
 
     try:
         if platform == "twitter":
-            result = await twitter_generate(request.paper_id, request.style, request.tone)
+            result = await twitter_generate(request.paper_id, request.description)
         elif platform == "linkedin":
-            result = await linkedin_generate(request.paper_id, request.style, request.tone)
+            result = await linkedin_generate(request.paper_id, request.description)
         elif platform == "carousel":
             result = await carousel_generate(
-                request.paper_id, request.style, request.tone, request.color_scheme
+                request.paper_id, request.description, request.color_scheme
             )
         else:
             raise ValueError(f"Unknown platform: {platform!r}")
