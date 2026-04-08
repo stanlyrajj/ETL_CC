@@ -12,8 +12,7 @@ from config import cfg
 from llm.base import LLMProvider, parse_json_response, sanitize_context
 from llm.rate_limiter import llm_rate_limiter
 from llm.openai import (
-    _CHAT_PROMPT,
-    _TWITTER_PROMPT, _LINKEDIN_PROMPT, _CAROUSEL_PROMPT,
+    _CHAT_PROMPT, _TWITTER_PROMPT, _LINKEDIN_PROMPT, _CAROUSEL_PROMPT,
     _STUDY_OUTLINE_PROMPT, _STUDY_SECTION_PROMPT, _FLASHCARD_PROMPT,
     _TECHNICAL_SECTION_PROMPTS,
 )
@@ -40,7 +39,8 @@ class GeminiProvider(LLMProvider):
             model=self._model_name,
             contents=contents,
             config=types.GenerateContentConfig(
-                system_instruction=system, max_output_tokens=max_tokens,
+                system_instruction=system,
+                max_output_tokens=max_tokens,
             ),
         )
         return response.text or ""
@@ -52,7 +52,8 @@ class GeminiProvider(LLMProvider):
             model=self._model_name,
             contents=prompt,
             config=types.GenerateContentConfig(
-                system_instruction=system, max_output_tokens=max_tokens,
+                system_instruction=system,
+                max_output_tokens=max_tokens,
             ),
         )
         return response.text or ""
@@ -94,9 +95,7 @@ class GeminiProvider(LLMProvider):
 
     # ── Social ────────────────────────────────────────────────────────────────
 
-    async def generate_twitter_thread(
-        self, context: str, title: str, description: str
-    ) -> dict:
+    async def generate_twitter_thread(self, context, title, description) -> dict:
         safe_context = sanitize_context(context)
         prompt = _TWITTER_PROMPT.format(
             title=title, description=description, context=safe_context
@@ -104,9 +103,7 @@ class GeminiProvider(LLMProvider):
         raw = await self._with_retry(self._generate_sync, self.SYSTEM_PROMPT, prompt)
         return parse_json_response(raw)
 
-    async def generate_linkedin_post(
-        self, context: str, title: str, description: str
-    ) -> dict:
+    async def generate_linkedin_post(self, context, title, description) -> dict:
         safe_context = sanitize_context(context)
         prompt = _LINKEDIN_PROMPT.format(
             title=title, description=description, context=safe_context
@@ -115,7 +112,7 @@ class GeminiProvider(LLMProvider):
         return parse_json_response(raw)
 
     async def generate_carousel_content(
-        self, context: str, title: str, description: str, color_scheme: str
+        self, context, title, description, color_scheme
     ) -> dict:
         safe_context = sanitize_context(context)
         prompt = _CAROUSEL_PROMPT.format(
