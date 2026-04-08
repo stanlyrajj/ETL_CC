@@ -1,8 +1,10 @@
 """
 linkedin_post.py — Generate a LinkedIn post from a processed paper.
 """
+
 import json
 import logging
+
 from database import db
 from llm.factory import get_provider
 from processing.embedder import embed
@@ -12,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_CONTEXT_CHARS = 4000
 
+# Shared VectorStore — created once on first call
 _vector_store: VectorStore | None = None
 
 
@@ -23,9 +26,16 @@ def _get_vector_store() -> VectorStore:
 
 
 def _validate(raw: dict) -> dict:
+    """
+    Validate and normalise the LLM output into the expected structure.
+
+    Expected: {content: str, hashtags: list[str]}
+    Raises ValueError with a clear message on any structural problem.
+    """
     if not isinstance(raw, dict):
         raise ValueError(f"Expected a JSON object from LLM, got {type(raw).__name__}.")
 
+    # Accept either "post" or "content" as the main text key
     post_text = raw.get("content") or raw.get("post") or ""
     if not isinstance(post_text, str) or not post_text.strip():
         raise ValueError("Output missing 'content' (or 'post') field or it is empty.")
@@ -34,14 +44,9 @@ def _validate(raw: dict) -> dict:
     if not isinstance(hashtags, list):
         hashtags = []
 
-    # Pass through inferred_attributes if present — stored in content metadata
-    inferred = raw.get("inferred_attributes") or {}
-
     return {
-        "content":             post_text.strip(),
-        "hook":                raw.get("hook", ""),
-        "hashtags":            [str(h) for h in hashtags],
-        "inferred_attributes": inferred,
+        "content":  post_text.strip(),
+        "hashtags": [str(h) for h in hashtags],
     }
 
 
@@ -49,9 +54,13 @@ async def generate(paper_id: str, description: str) -> dict:
     """
     Generate a LinkedIn post for the given paper.
 
-    description: user's one-line brief describing intent, audience, tone.
-                 All content attributes are inferred from it by the LLM.
+    1. Retrieve paper context from the vector store
+    2. Call the LLM with the creator's description to infer style/tone/voice
+    3. Validate output structure
+    4. Save to SocialContent table
+    5. Return the validated dict
     """
+    # ── 1. Retrieve paper context ──────────────────────────────────────────────
     vs      = _get_vector_store()
     context = await vs.get_paper_context(paper_id, max_chars=_MAX_CONTEXT_CHARS)
 
@@ -61,10 +70,12 @@ async def generate(paper_id: str, description: str) -> dict:
             "Ensure the paper has been processed and embedded first."
         )
 
+    # ── 2. Get paper title from database ──────────────────────────────────────
     async with db.session() as sess:
         paper = await db.get_paper(sess, paper_id)
     title = paper.title if paper else paper_id
 
+    # ── 3. Call LLM ───────────────────────────────────────────────────────────
     provider = get_provider()
     raw      = await provider.generate_linkedin_post(
         context=context,
@@ -72,8 +83,10 @@ async def generate(paper_id: str, description: str) -> dict:
         description=description,
     )
 
+    # ── 4. Validate output structure ──────────────────────────────────────────
     result = _validate(raw)
 
+    # ── 5. Save to database ───────────────────────────────────────────────────
     async with db.session() as sess:
         await db.save_social(
             sess,
