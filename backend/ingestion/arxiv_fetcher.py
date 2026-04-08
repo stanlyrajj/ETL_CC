@@ -17,6 +17,25 @@ from ingestion.validator import DocumentInput, ValidationError, validate
 logger = logging.getLogger(__name__)
 
 
+def _to_arxiv_term(text: str) -> str:
+    """
+    Convert a user-supplied topic or keyword to a valid arXiv query term.
+
+    arXiv query syntax rules:
+      - Single words can be used bare:            machine
+      - Multi-word phrases must be double-quoted: "machine learning"
+      - Prefix with all: to search all fields (title, abstract, author, ...)
+
+    We always use all: so the search matches titles AND abstracts, not just
+    the title field (the SDK default when no prefix is given).
+    """
+    text = text.strip()
+    # Quote phrases that contain spaces so arXiv treats them as a single term
+    if " " in text:
+        return f'all:"{text}"'
+    return f"all:{text}"
+
+
 def _build_query(
     topic:     str,
     date_from: datetime | None,
@@ -25,10 +44,10 @@ def _build_query(
     keyword:   str | None,
 ) -> str:
     """Build the arXiv query string with optional filters."""
-    parts = [topic]
+    parts = [_to_arxiv_term(topic)]
 
     if keyword:
-        parts.append(keyword)
+        parts.append(_to_arxiv_term(keyword))
 
     query = " AND ".join(parts)
 
@@ -64,6 +83,9 @@ def _map_result(result: arxiv.Result, topic: str) -> dict:
     }
 
 
+_ARXIV_TIMEOUT = 30  # seconds before giving up on the arXiv API
+
+
 def _fetch_sync(query: str, limit: int, sort_by: str) -> list[arxiv.Result]:
     """Blocking SDK call — runs inside an executor."""
     criterion = (
@@ -71,7 +93,12 @@ def _fetch_sync(query: str, limit: int, sort_by: str) -> list[arxiv.Result]:
         if sort_by == "relevance"
         else arxiv.SortCriterion.SubmittedDate
     )
-    client = arxiv.Client()
+    # delay_seconds=0 disables the SDK's own inter-page delay (we handle rate
+    # limiting ourselves). num_retries=1 stops silent infinite retry loops.
+    client = arxiv.Client(
+        num_retries=1,
+        delay_seconds=0,
+    )
     search = arxiv.Search(
         query=query,
         max_results=limit,
@@ -103,7 +130,20 @@ async def search(
 
     loop = asyncio.get_running_loop()
     try:
-        results = await loop.run_in_executor(None, _fetch_sync, query, limit, sort_by)
+        results = await asyncio.wait_for(
+            loop.run_in_executor(None, _fetch_sync, query, limit, sort_by),
+            timeout=_ARXIV_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "arXiv search timed out after %ds — the arXiv API may be slow or unreachable. "
+            "Query: %r",
+            _ARXIV_TIMEOUT, query,
+        )
+        raise RuntimeError(
+            f"arXiv API did not respond within {_ARXIV_TIMEOUT} seconds. "
+            "Check your internet connection or try again later."
+        )
     except Exception as exc:
         logger.error("arXiv SDK call failed: %s", exc)
         raise
