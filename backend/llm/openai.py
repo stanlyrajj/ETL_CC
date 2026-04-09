@@ -75,35 +75,57 @@ Rules:
 Return ONLY a JSON object — no markdown, no extra text:
 {{"post": "...", "hashtags": ["..."], "hook": "...", "audience": "...", "word_count": 0}}"""
 
-_CAROUSEL_PROMPT = """You are designing a LinkedIn carousel to make an academic paper accessible and shareable.
+_CAROUSEL_PROMPT = """You are writing content for a visually designed LinkedIn carousel PDF about an academic paper.
+Each slide is rendered at 1080x1080pt with distinct layout per type — your words are the only content.
 
 Paper title: {title}
 Creator intent: {description}
 Visual style: {color_scheme}
 
-Inferred from the intent above, apply these attributes:
-- Audience level: expert, practitioner, or general public
-- Slide density: text-heavy explanation vs minimal punchy bullets
-- Narrative arc: problem → solution → evidence → takeaway, or top-N insights list
-- Visual emphasis: data/stats, diagrams hints, or quotes
-
 {context}
 
-Slide type rules — you MUST use exactly these types, in this order:
-  1. First slide: type = "cover"  (title + subtitle hook)
-  2-6. Middle slides: type = "finding" (key insight), "method" (how it works),
-       "stat" (a number/result), or "quote" (a direct insight worth highlighting)
-  Last slide: type = "cta"  (what the reader should do next)
+==SLIDE TYPE GUIDE==
 
-Each slide must have:
-  - type: one of cover | finding | method | stat | quote | cta
-  - title: short headline (max 8 words)
-  - body: 2-4 bullet points or 2 short sentences
-  - visual_hint: one sentence describing what image/graphic would work here
+cover
+  title: The single most surprising or counterintuitive finding from the paper — max 10 words.
+         Do NOT use the paper title. Write a hook that creates curiosity or tension.
+  body:  One sentence teaser (max 20 words) that makes the reader want to swipe.
 
-Create 6-8 slides total. First must be cover, last must be cta.
+finding
+  title: One bold declarative claim from the paper — a complete thought, max 12 words.
+         Write it as a statement, not a question or label.
+  body:  2-3 short sentences unpacking WHY this finding matters. Use plain language.
+         Avoid academic phrasing. Think "what would you say to a smart friend".
 
-Return ONLY a JSON object — no markdown, no extra text:
+method
+  title: What the researchers actually DID — the core technique, max 10 words.
+  body:  Explain the method step by step in plain language. Max 4 short steps or sentences.
+         Use an analogy if it helps. No jargon without explanation.
+
+stat  ← IMPORTANT: the renderer extracts the FIRST number in the title and renders it huge.
+  title: START with the number. Format: "90% fewer parameters" or "15 datasets tested" or "3x faster".
+         The number must come first. Keep the rest of the title to 5 words max.
+  body:  1-2 sentences explaining what this number means in practice.
+
+quote
+  title: Attribution only — the author's name, institution, or "The authors" (max 6 words).
+  body:  The most insightful, memorable, or provocative sentence from the paper.
+         Should work standalone — someone screenshot-able. Max 50 words.
+
+cta
+  title: One specific action verb phrase — "Read the full paper", "Try this approach",
+         "Follow for more AI research" — max 7 words.
+  body:  1-2 sentences on what the reader will gain by taking that action.
+
+==RULES==
+- Slides: cover, then 4-6 middle slides (mix of finding/method/stat/quote), then cta
+- Total: 6-8 slides. First MUST be cover. Last MUST be cta.
+- At least ONE stat slide if the paper contains any quantitative results
+- No generic phrases: avoid "groundbreaking", "revolutionary", "exciting new research"
+- Each slide must stand alone — no "as mentioned above" or cross-references
+- body text max 60 words per slide
+
+Return ONLY valid JSON — no markdown fences, no extra text:
 {{"slides": [{{"type": "cover", "title": "...", "body": "...", "visual_hint": "..."}}], "hashtags": ["..."]}}"""
 
 _STUDY_OUTLINE_PROMPT = """You are analyzing the following research paper to create a structured learning plan.
