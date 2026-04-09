@@ -1268,11 +1268,13 @@ function FollowUpSuggestions({ lastResponse, onSelect, enabled }: {
 // Session Sidebar
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSearch }: {
+function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSearch, collapsed, onToggleCollapse }: {
   sessions: Session[]; activeSessionId: string | null
   onSelect: (sessionId: string) => void
   onDelete: (sessionId: string) => void
   onNewSearch: () => void
+  collapsed: boolean
+  onToggleCollapse: () => void
 }) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [deleting, setDeleting]           = useState<string | null>(null)
@@ -1285,12 +1287,55 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
     finally { setDeleting(null); setConfirmDelete(null) }
   }
 
+  // ── Collapsed rail ───────────────────────────────────────────────────────
+  if (collapsed) {
+    return (
+      <div style={{ width: '52px', flexShrink: 0, background: 'var(--bg-2)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '14px', gap: '6px', overflow: 'hidden' }}>
+        {/* Expand button */}
+        <button suppressHydrationWarning onClick={onToggleCollapse} title="Show sessions"
+          style={{ width: '36px', height: '36px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3)', transition: 'all 0.15s', flexShrink: 0 }}
+          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)' }}
+          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-3)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        {/* Session count badge */}
+        {sessions.length > 0 && (
+          <span style={{ fontSize: '0.6875rem', fontFamily: 'var(--font-mono)', color: 'var(--accent)', background: 'var(--accent-glow)', padding: '2px 6px', borderRadius: '10px', fontWeight: 600 }}>{sessions.length}</span>
+        )}
+        {/* Dot indicators for recent sessions (max 6) */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
+          {sessions.slice(0, 6).map((s, i) => {
+            const modeColor = MODE_COLORS[s.mode] ?? 'var(--accent)'
+            const isActive = s.session_id === activeSessionId
+            return (
+              <button suppressHydrationWarning key={s.session_id} onClick={() => onSelect(s.session_id)}
+                title={s.title || s.topic || s.session_id}
+                style={{ width: '8px', height: '8px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: isActive ? modeColor : 'var(--border)', padding: 0, transition: 'all 0.15s', flexShrink: 0 }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = modeColor }}
+                onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = 'var(--border)' }} />
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  // ── Expanded sidebar ─────────────────────────────────────────────────────
   return (
     <div style={{ width: '260px', flexShrink: 0, background: 'var(--bg-2)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div style={{ padding: '16px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', flexShrink: 0 }} />
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', letterSpacing: '0.08em' }}>RESEARCHRAG</span>
+      <div style={{ padding: '12px 12px 12px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', flexShrink: 0 }} />
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent)', letterSpacing: '0.08em' }}>RESEARCHRAG</span>
+          </div>
+          {/* Collapse button */}
+          <button suppressHydrationWarning onClick={onToggleCollapse} title="Collapse sidebar"
+            style={{ width: '26px', height: '26px', borderRadius: '6px', border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3)', transition: 'all 0.15s', flexShrink: 0 }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-3)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
         </div>
         <button suppressHydrationWarning className="btn btn-ghost btn-full btn-sm" onClick={onNewSearch}>+ New search</button>
       </div>
@@ -1346,8 +1391,12 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
 // VIEW 4: Chat
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNewSearch: () => void }) {
-  const [sessions, setSessions]           = useState<Session[]>([])
+function ChatView({ initialPapers, onNewSearch, sessions, setSessions, sidebarCollapsed, onToggleSidebar, onSessionSelect }: {
+  initialPapers: Paper[]; onNewSearch: () => void
+  sessions: Session[]; setSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  sidebarCollapsed: boolean; onToggleSidebar: () => void
+  onSessionSelect?: string | undefined   // pre-load this session ID on mount
+}) {
   const [activeSession, setActiveSession] = useState<SessionDetail | null>(null)
   const [messages, setMessages]           = useState<Message[]>([])
   const [input, setInput]                 = useState('')
@@ -1375,15 +1424,15 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
 
   const lastAssistantMessage = messages.filter(m => m.role === 'assistant').slice(-1)[0]?.content ?? ''
 
-  useEffect(() => { loadSessions() }, [])
-
-  async function loadSessions() {
-    try {
-      const res = await listSessions()
-      setSessions(res.sessions)
-      if (res.sessions.length > 0 && !activeSession) await openSession(res.sessions[0].session_id)
-    } catch { /* non-critical */ }
-  }
+  // Auto-open most recent session (or a specific one passed from App)
+  useEffect(() => {
+    if (onSessionSelect) {
+      openSession(onSessionSelect)
+    } else if (sessions.length > 0 && !activeSession) {
+      openSession(sessions[0].session_id)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function openSession(sessionId: string) {
     setSessError('')
@@ -1463,7 +1512,8 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       <SessionSidebar sessions={sessions} activeSessionId={activeSession?.session_id ?? null}
-        onSelect={openSession} onDelete={handleSessionDeleted} onNewSearch={onNewSearch} />
+        onSelect={openSession} onDelete={handleSessionDeleted} onNewSearch={onNewSearch}
+        collapsed={sidebarCollapsed} onToggleCollapse={onToggleSidebar} />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
 
@@ -1626,10 +1676,72 @@ function ChatView({ initialPapers, onNewSearch }: { initialPapers: Paper[]; onNe
 // Root App
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Persistent sidebar wrapper for non-chat views ────────────────────────────
+function AppShell({ children, sessions, activeSessionId, sidebarCollapsed, onToggleSidebar, onSessionSelect, onDelete, onNewSearch }: {
+  children: React.ReactNode
+  sessions: Session[]; activeSessionId: string | null
+  sidebarCollapsed: boolean; onToggleSidebar: () => void
+  onSessionSelect: (id: string) => void
+  onDelete: (id: string) => void
+  onNewSearch: () => void
+}) {
+  return (
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      <SessionSidebar
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelect={onSessionSelect}
+        onDelete={onDelete}
+        onNewSearch={onNewSearch}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={onToggleSidebar}
+      />
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [view, setView]                   = useState<View>('search')
   const [searchResults, setSearchResults] = useState<PaperPreview[]>([])
   const [papers, setPapers]               = useState<Paper[]>([])
+
+  // ── Global session state — lifted out of ChatView ─────────────────────────
+  const [sessions, setSessions]           = useState<Session[]>([])
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
+    getStoredBool('researchrag_sidebar_collapsed', false)
+  )
+
+  function toggleSidebar() {
+    setSidebarCollapsed(v => {
+      setStoredBool('researchrag_sidebar_collapsed', !v)
+      return !v
+    })
+  }
+
+  // Load all sessions once on mount — available across all views
+  useEffect(() => {
+    async function loadSessions() {
+      try {
+        const res = await listSessions()
+        setSessions(res.sessions)
+      } catch { /* non-critical */ }
+    }
+    loadSessions()
+  }, [])
+
+  function handleSessionDeleted(sessionId: string) {
+    setSessions(prev => prev.filter(s => s.session_id !== sessionId))
+  }
+
+  // Selecting a session from any view navigates to chat with that session
+  function handleSessionSelect(sessionId: string) {
+    setPendingSessionId(sessionId)
+    setView('chat')
+  }
 
   function handleSearchResults(results: PaperPreview[]) {
     setSearchResults(results)
@@ -1644,12 +1756,42 @@ export default function App() {
     setView('processing')
   }
 
+  function handleNewSearch() {
+    setPendingSessionId(null)
+    setSearchResults([])
+    setView('search')
+  }
+
+  // Chat view manages its own sidebar rendering internally (full layout control)
+  if (view === 'chat') {
+    return (
+      <ChatView
+        initialPapers={papers}
+        onNewSearch={handleNewSearch}
+        sessions={sessions}
+        setSessions={setSessions}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={toggleSidebar}
+        onSessionSelect={pendingSessionId ?? undefined}
+        key={pendingSessionId ?? 'chat'}
+      />
+    )
+  }
+
+  // All other views are wrapped in AppShell which provides the persistent sidebar
   return (
-    <>
+    <AppShell
+      sessions={sessions}
+      activeSessionId={null}
+      sidebarCollapsed={sidebarCollapsed}
+      onToggleSidebar={toggleSidebar}
+      onSessionSelect={handleSessionSelect}
+      onDelete={handleSessionDeleted}
+      onNewSearch={handleNewSearch}
+    >
       {view === 'search'     && <SearchView onResults={handleSearchResults} />}
-      {view === 'selection'  && <SelectionView papers={searchResults} onSelect={handleSelection} onBack={() => setView('search')} />}
+      {view === 'selection'  && <SelectionView papers={searchResults} onSelect={handleSelection} onBack={handleNewSearch} />}
       {view === 'processing' && <ProcessingView papers={papers} onDone={p => { setPapers(p); setView('chat') }} />}
-      {view === 'chat'       && <ChatView initialPapers={papers} onNewSearch={() => { setSearchResults([]); setView('search') }} />}
-    </>
+    </AppShell>
   )
 }
