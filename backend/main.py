@@ -1,5 +1,5 @@
 """
-main.py — FastAPI application entry point.
+main.py — FastAPI application entry point for all application logic, including startup tasks and route definitions.
 """
 import asyncio
 import logging
