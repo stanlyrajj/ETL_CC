@@ -80,7 +80,7 @@ Each slide is rendered at 1080x1080pt with distinct layout per type — your wor
 
 Paper title: {title}
 Creator intent: {description}
-Visual style: {color_scheme}
+Slide color theme: {color_scheme}
 
 {context}
 
@@ -117,16 +117,20 @@ cta
          "Follow for more AI research" — max 7 words.
   body:  1-2 sentences on what the reader will gain by taking that action.
 
-==RULES==
-- Slides: cover, then 4-6 middle slides (mix of finding/method/stat/quote), then cta
+==OUTPUT RULES — READ CAREFULLY==
+- Return ONLY valid JSON. Zero markdown, zero extra text before or after the JSON.
+- Do NOT use markdown formatting inside JSON strings. No **bold**, no *italic*, no __underline__.
+  Plain text only inside every string value.
+- The "slide_note" field is a one-sentence description of an ideal image/graphic for that slide.
+  It is NOT related to the color theme. Example: "A diagram comparing sparse vs dense networks."
+- Slides: cover, then 4-6 middle slides (mix of finding/method/stat/quote), then cta.
 - Total: 6-8 slides. First MUST be cover. Last MUST be cta.
-- At least ONE stat slide if the paper contains any quantitative results
-- No generic phrases: avoid "groundbreaking", "revolutionary", "exciting new research"
-- Each slide must stand alone — no "as mentioned above" or cross-references
-- body text max 60 words per slide
+- At least ONE stat slide if the paper contains any quantitative results.
+- Each slide must stand alone — no cross-references to other slides.
+- body text max 60 words per slide.
 
-Return ONLY valid JSON — no markdown fences, no extra text:
-{{"slides": [{{"type": "cover", "title": "...", "body": "...", "visual_hint": "..."}}], "hashtags": ["..."]}}"""
+Return this exact JSON structure:
+{{"slides": [{{"type": "cover", "title": "...", "body": "...", "slide_note": "..."}}], "hashtags": ["..."]}}"""
 
 _STUDY_OUTLINE_PROMPT = """You are analyzing the following research paper to create a structured learning plan.
 
