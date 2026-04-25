@@ -504,7 +504,7 @@ def render(slides: list[dict], color_scheme: str, output_dir: str) -> str:
 
     Parameters
     ----------
-    slides       : list of dicts with keys: type, title, body, visual_hint
+    slides       : list of dicts with keys: type, title, body, slide_note
     color_scheme : "light" | "dark" | "bold"
     output_dir   : directory to write the PDF into
     """
