@@ -75,62 +75,82 @@ Rules:
 Return ONLY a JSON object — no markdown, no extra text:
 {{"post": "...", "hashtags": ["..."], "hook": "...", "audience": "...", "word_count": 0}}"""
 
-_CAROUSEL_PROMPT = """You are writing content for a visually designed LinkedIn carousel PDF about an academic paper.
-Each slide is rendered at 1080x1080pt with distinct layout per type — your words are the only content.
+_CAROUSEL_PROMPT = """You are writing content for a visually designed LinkedIn carousel PDF.
+Each slide is rendered at 1080x1080pt. Your words are the ONLY content — write carefully.
 
 Paper title: {title}
 Creator intent: {description}
 Slide color theme: {color_scheme}
 
+==PAPER CONTENT — USE ONLY THIS AS YOUR SOURCE==
 {context}
+==END OF PAPER CONTENT==
+
+==GROUNDING RULES — CRITICAL==
+- Every fact, number, quote, and claim you write MUST come directly from the paper content above.
+- Do NOT invent statistics, percentages, or results that are not stated in the paper content.
+- Do NOT quote or attribute words to any person unless that exact quote appears in the paper content.
+- If the paper contains no quantitative results, do NOT include a stat slide — use a finding instead.
+- If you are unsure whether a fact appears in the paper, do not include it.
+- The paper content above is the ONLY source. Ignore everything you know about the topic from training.
 
 ==SLIDE TYPE GUIDE==
 
 cover
-  title: The single most surprising or counterintuitive finding from the paper — max 10 words.
-         Do NOT use the paper title. Write a hook that creates curiosity or tension.
-  body:  One sentence teaser (max 20 words) that makes the reader want to swipe.
+  title: Write a hook — a provocative question or the most counterintuitive claim in the paper.
+         Max 10 words. Do NOT restate the paper title.
+         BAD: "Scientists Need Inductive Inference"  (label, not a hook)
+         GOOD: "Can AI actually think like a scientist? This paper says maybe."
+  body:  One sentence teaser (max 20 words) that creates curiosity. Make the reader want slide 2.
 
 finding
-  title: One bold declarative claim from the paper — a complete thought, max 12 words.
-         Write it as a statement, not a question or label.
-  body:  2-3 short sentences unpacking WHY this finding matters. Use plain language.
-         Avoid academic phrasing. Think "what would you say to a smart friend".
+  title: A FULL SENTENCE stating one specific claim from the paper. Max 12 words.
+         Must be a complete declarative sentence — subject + verb + object.
+         BAD: "Deductive Reasoning Is Necessary"  (noun phrase label — WRONG)
+         BAD: "Scientists Need Inductive Inference"  (noun phrase label — WRONG)
+         GOOD: "AI cannot do science without the ability to generalise from observation."
+         GOOD: "Current AI systems lack the inductive reasoning that human scientists use daily."
+  body:  2-3 short sentences explaining WHY this matters to a general audience. No jargon.
 
 method
-  title: What the researchers actually DID — the core technique, max 10 words.
-  body:  Explain the method step by step in plain language. Max 4 short steps or sentences.
-         Use an analogy if it helps. No jargon without explanation.
+  title: What this specific paper proposes or demonstrates — max 10 words. Full sentence preferred.
+         Describe the paper's actual contribution, not the general scientific method.
+         GOOD: "The authors built a framework that tests AI hypotheses automatically."
+  body:  Explain in plain language what the researchers actually did, step by step.
+         Use an analogy if helpful. Max 4 short steps or sentences.
 
-stat  ← IMPORTANT: the renderer extracts the FIRST number in the title and renders it huge.
-  title: START with the number. Format: "90% fewer parameters" or "15 datasets tested" or "3x faster".
-         The number must come first. Keep the rest of the title to 5 words max.
-  body:  1-2 sentences explaining what this number means in practice.
+stat  ← The renderer makes the FIRST number in the title enormous (180pt). Use this wisely.
+  title: MUST start with a number from the paper. Format: "5 protocols compared" or "3x improvement".
+         Only use numbers that appear explicitly in the paper content above.
+         If no clear number exists in the paper, use a finding slide instead.
+  body:  1-2 sentences on what this number means in practice.
 
 quote
-  title: Attribution only — the author's name, institution, or "The authors" (max 6 words).
-  body:  The most insightful, memorable, or provocative sentence from the paper.
-         Should work standalone — someone screenshot-able. Max 50 words.
+  title: Attribution — who said it. Use exact names/institutions from the paper only.
+         If no clear author is named in the paper content, write "The authors".
+  body:  A verbatim or closely paraphrased sentence from the paper content above.
+         MUST be traceable to the paper content. Do not invent quotes. Max 50 words.
 
 cta
-  title: One specific action verb phrase — "Read the full paper", "Try this approach",
-         "Follow for more AI research" — max 7 words.
-  body:  1-2 sentences on what the reader will gain by taking that action.
+  title: One action verb phrase specific to THIS paper — max 7 words.
+         GOOD: "Read the full AI Agent Protocols breakdown"
+         BAD: "Learn more" or "Discover the future" (too vague)
+  body:  1-2 sentences on what the reader gains. Reference something specific from the paper.
 
-==OUTPUT RULES — READ CAREFULLY==
-- Return ONLY valid JSON. Zero markdown, zero extra text before or after the JSON.
-- Do NOT use markdown formatting inside JSON strings. No **bold**, no *italic*, no __underline__.
-  Plain text only inside every string value.
-- The "slide_note" field is a one-sentence description of an ideal image/graphic for that slide.
-  It is NOT related to the color theme. Example: "A diagram comparing sparse vs dense networks."
-- Slides: cover, then 4-6 middle slides (mix of finding/method/stat/quote), then cta.
+==OUTPUT RULES==
+- Return ONLY valid JSON. No markdown fences, no preamble, no trailing text.
+- NO markdown formatting inside strings. No **bold**, *italic*, or __underline__. Plain text only.
+- Slides: cover → 4-6 middle slides (finding/method/stat/quote mix) → cta
 - Total: 6-8 slides. First MUST be cover. Last MUST be cta.
-- At least ONE stat slide if the paper contains any quantitative results.
-- Each slide must stand alone — no cross-references to other slides.
+- Each slide must stand alone. No "as we saw" or "in the previous slide".
 - body text max 60 words per slide.
 
-Return this exact JSON structure:
-{{"slides": [{{"type": "cover", "title": "...", "body": "...", "slide_note": "..."}}], "hashtags": ["..."]}}"""
+Return this exact structure:
+{{"slides": [{{"type": "cover", "title": "...", "body": "...", "slide_note": "..."}}], "hashtags": ["..."]}}
+
+The "slide_note" field: one sentence describing a relevant image or diagram for that slide.
+Example: "A flowchart showing agent-to-agent communication via the A2A protocol."
+This field describes a visual — it has nothing to do with the color theme."""
 
 _STUDY_OUTLINE_PROMPT = """You are analyzing the following research paper to create a structured learning plan.
 
