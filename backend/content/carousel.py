@@ -37,20 +37,16 @@ def _validate(raw: dict) -> dict:
     Expected:
       {
         slides: [
-          {type: str, title: str, body: str, visual_hint: str},
+          {type, title, body, slide_note},   # slide_note replaces old visual_hint
           ...
         ],
         hashtags: list[str]
       }
 
-    Rules:
-    - slides must be a non-empty list
-    - each slide must have: type, title, body, visual_hint
-    - type must be one of the valid slide types
-    - first slide must be type "cover"
-    - last slide must be type "cta"
-
-    Raises CarouselValidationError with a clear message on any failure.
+    Validation approach:
+    - Hard errors: missing slides list, non-dict slide, missing title/body
+    - Soft recovery: unknown type -> "finding", wrong first/last types -> injected
+    - Field aliases: heading/title, content/body, slide_note/visual_hint/speaker_note
     """
     if not isinstance(raw, dict):
         raise CarouselValidationError(
@@ -61,6 +57,29 @@ def _validate(raw: dict) -> dict:
     if not isinstance(slides_raw, list) or len(slides_raw) == 0:
         raise CarouselValidationError("Output missing 'slides' list or list is empty.")
 
+    # Type alias map — handles common LLM deviations
+    _aliases: dict[str, str] = {
+        "introduction":   "cover",
+        "intro":          "cover",
+        "title":          "cover",
+        "headline":       "cover",
+        "conclusion":     "cta",
+        "call_to_action": "cta",
+        "call to action": "cta",
+        "outro":          "cta",
+        "result":         "finding",
+        "results":        "finding",
+        "insight":        "finding",
+        "key finding":    "finding",
+        "methodology":    "method",
+        "approach":       "method",
+        "statistic":      "stat",
+        "statistics":     "stat",
+        "data":           "stat",
+        "number":         "stat",
+        "testimonial":    "quote",
+    }
+
     slides: list[dict] = []
     for i, slide in enumerate(slides_raw):
         if not isinstance(slide, dict):
@@ -68,69 +87,80 @@ def _validate(raw: dict) -> dict:
                 f"Slide {i + 1} is not a JSON object (got {type(slide).__name__})."
             )
 
-        # Normalise: LLM sometimes uses "heading" instead of "title"
-        title = slide.get("title") or slide.get("heading") or ""
-        body  = slide.get("body")  or slide.get("content") or ""
+        # Normalise title — LLM sometimes uses "heading"
+        title = (
+            slide.get("title") or slide.get("heading") or ""
+        ).strip()
 
-        # Normalise: LLM sometimes uses "speaker_note" or omits visual_hint
-        visual_hint = (
-            slide.get("visual_hint")
+        # Normalise body — LLM sometimes uses "content" or "text"
+        body = (
+            slide.get("body") or slide.get("content") or slide.get("text") or ""
+        ).strip()
+
+        # Normalise slide_note — accepts old visual_hint and speaker_note too
+        slide_note = (
+            slide.get("slide_note")
+            or slide.get("visual_hint")
             or slide.get("visual")
             or slide.get("speaker_note")
             or ""
-        )
+        ).strip()
+
+        # Reject slide_note values that are clearly color scheme bleed-through
+        _color_values = {"light", "dark", "bold", "auto", "default"}
+        if slide_note.lower() in _color_values:
+            logger.warning(
+                "Slide %d: slide_note looks like a color scheme value (%r) — clearing.",
+                i + 1, slide_note,
+            )
+            slide_note = ""
 
         slide_type = str(slide.get("type") or "").lower().strip()
-
-        # Map common LLM aliases to our valid types
-        _aliases = {
-            "introduction": "cover",
-            "intro":        "cover",
-            "title":        "cover",
-            "conclusion":   "cta",
-            "call_to_action": "cta",
-            "call to action": "cta",
-            "result":       "finding",
-            "results":      "finding",
-            "methodology":  "method",
-            "statistic":    "stat",
-            "statistics":   "stat",
-            "data":         "stat",
-        }
         slide_type = _aliases.get(slide_type, slide_type)
 
         if slide_type not in _VALID_SLIDE_TYPES:
-            # Default unmapped types to "finding" rather than hard-failing
             logger.warning(
                 "Slide %d has unknown type %r — defaulting to 'finding'", i + 1, slide_type
             )
             slide_type = "finding"
 
-        if not title.strip():
+        if not title:
             raise CarouselValidationError(f"Slide {i + 1} is missing a title.")
-        if not body.strip():
+        if not body:
             raise CarouselValidationError(f"Slide {i + 1} is missing body text.")
 
         slides.append({
-            "type":        slide_type,
-            "title":       title.strip(),
-            "body":        body.strip(),
-            "visual_hint": visual_hint.strip(),
+            "type":       slide_type,
+            "title":      title,
+            "body":       body,
+            "slide_note": slide_note,
         })
 
-    # First slide must be cover
-    if slides[0]["type"] != "cover":
-        raise CarouselValidationError(
-            f"First slide must be type 'cover', got {slides[0]['type']!r}. "
-            "Check the LLM prompt or regenerate."
-        )
+    # ── Structural enforcement with soft recovery ─────────────────────────────
 
-    # Last slide must be cta
-    if slides[-1]["type"] != "cta":
-        raise CarouselValidationError(
-            f"Last slide must be type 'cta', got {slides[-1]['type']!r}. "
-            "Check the LLM prompt or regenerate."
+    # First slide must be cover — if not, prepend a minimal cover derived from slide 1
+    if slides[0]["type"] != "cover":
+        logger.warning(
+            "First slide is type %r, not 'cover' — prepending a cover slide.", slides[0]["type"]
         )
+        slides.insert(0, {
+            "type":       "cover",
+            "title":      slides[0]["title"],
+            "body":       "Swipe to explore the key findings from this paper.",
+            "slide_note": "",
+        })
+
+    # Last slide must be cta — if not, append a minimal cta
+    if slides[-1]["type"] != "cta":
+        logger.warning(
+            "Last slide is type %r, not 'cta' — appending a cta slide.", slides[-1]["type"]
+        )
+        slides.append({
+            "type":       "cta",
+            "title":      "Read the full paper",
+            "body":       "Find the complete methodology, results, and references in the original publication.",
+            "slide_note": "",
+        })
 
     hashtags = raw.get("hashtags") or []
     if not isinstance(hashtags, list):
@@ -138,7 +168,7 @@ def _validate(raw: dict) -> dict:
 
     return {
         "slides":   slides,
-        "hashtags": [str(h) for h in hashtags],
+        "hashtags": [str(h).lstrip("#") for h in hashtags],
     }
 
 
