@@ -34,9 +34,80 @@ def sanitize_context(text: str) -> str:
     return f"<paper_content>\n{text}\n</paper_content>"
 
 
+def _sanitize_json_string(raw: str) -> str:
+    """
+    Fix common LLM JSON formatting issues before parsing:
+
+    1. Strip markdown fences (```json ... ```)
+    2. Strip markdown bold/italic markers (**text**, *text*, __text__)
+       that Llama/Groq injects inside JSON string values.
+       e.g.  "title": **"AI Wins"**  ->  "title": "AI Wins"
+             "body": "This is **key**"  ->  "body": "This is key"
+    3. Remove illegal bare control characters (\n, \t, 0x00-0x1F) inside
+       JSON string values — replacing them with proper JSON escape sequences.
+    """
+    # Strip markdown fences
+    s = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+    s = re.sub(r"\s*```$", "", s.strip())
+
+    # ── Pass 1: strip markdown bold/italic markers globally ───────────────────
+    # These appear AROUND or INSIDE string values and always break JSON parsing.
+    # Remove **, ***, * (bold/italic) — done before the char-walk so the
+    # char-walker never sees them. Single _ is left alone (used in identifiers).
+    s = re.sub(r"\*{1,3}", "", s)   # removes *, **, ***
+    s = re.sub(r"_{2}",     "", s)   # removes __ bold markers
+
+    # ── Pass 2: fix bare control characters inside JSON string values ─────────
+    _ESCAPE_MAP: dict[str, str] = {
+        "\x00": "\\u0000", "\x01": "\\u0001", "\x02": "\\u0002",
+        "\x03": "\\u0003", "\x04": "\\u0004", "\x05": "\\u0005",
+        "\x06": "\\u0006", "\x07": "\\u0007", "\x08": "\\b",
+        "\x0b": "\\u000b", "\x0c": "\\f",     "\x0e": "\\u000e",
+        "\x0f": "\\u000f", "\x10": "\\u0010", "\x11": "\\u0011",
+        "\x12": "\\u0012", "\x13": "\\u0013", "\x14": "\\u0014",
+        "\x15": "\\u0015", "\x16": "\\u0016", "\x17": "\\u0017",
+        "\x18": "\\u0018", "\x19": "\\u0019", "\x1a": "\\u001a",
+        "\x1b": "\\u001b", "\x1c": "\\u001c", "\x1d": "\\u001d",
+        "\x1e": "\\u001e", "\x1f": "\\u001f",
+        "\n":   "\\n",
+        "\t":   "\\t",
+        "\r":   "\\r",
+    }
+
+    out    : list[str] = []
+    in_str : bool      = False
+    i      : int       = 0
+    while i < len(s):
+        ch = s[i]
+        if in_str:
+            if ch == "\\":
+                # Escaped sequence — consume both chars unchanged
+                out.append(ch)
+                i += 1
+                if i < len(s):
+                    out.append(s[i])
+                    i += 1
+                continue
+            if ch == "\"":
+                # Closing quote
+                in_str = False
+                out.append(ch)
+                i += 1
+                continue
+            # Inside string — escape any bare control character
+            escaped = _ESCAPE_MAP.get(ch)
+            out.append(escaped if escaped is not None else ch)
+        else:
+            if ch == "\"":
+                in_str = True
+            out.append(ch)
+        i += 1
+
+    return "".join(out)
+
+
 def parse_json_response(raw: str) -> dict:
-    cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*```$", "", cleaned.strip())
+    cleaned = _sanitize_json_string(raw)
     try:
         result = json.loads(cleaned)
         if not isinstance(result, dict):
