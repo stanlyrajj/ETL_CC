@@ -3,6 +3,8 @@ generate.py — Social content generation, PDF export, share deeplink,
 model selection, and follow-up question endpoints.
 
 Every route returns explicit success or failure — no silent failures.
+This is important for the frontend to provide clear user feedback and avoiding "stuck" states where the user is waiting for something to happen but
+nothing does.
 """
 
 import asyncio
