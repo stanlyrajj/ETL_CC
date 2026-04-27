@@ -1,7 +1,5 @@
 """
 share.py — Generate deep-links to social platform post composers.
-
-Both functions URL-encode content and respect platform character limits.
 """
 
 import logging
