@@ -1,5 +1,5 @@
 """
-chat.py — Chat session and RAG message endpoints.
+chat.py — Chat session and RAG message endpoints and utilities.
 """
 
 import logging
