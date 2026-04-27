@@ -9,7 +9,6 @@ Design philosophy (inspired by Anthropic "Claude in Claude" carousel):
   - Content slides: left accent bar + type-size contrast (large claim, small body)
   - Stat slides: the number IS the slide — enormous, centered, unavoidable
   - Quote slides: full-bleed toned background, italic serif, clean attribution
-  - CTA: solid accent background, reversed-out text, one bold ask
 
 Each slide is 1080x1080 pt (standard LinkedIn carousel).
 Three schemes: light (warm cream), dark (deep navy), bold (vivid teal+yellow).
