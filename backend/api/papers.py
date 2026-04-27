@@ -7,6 +7,8 @@ Two-phase search flow:
   POST /papers/process — accept selected paper IDs, save to DB, start pipeline.
 
 Every route returns explicit success or failure — no silent failures.
+This is important for the frontend to provide clear user feedback and avoiding "stuck" states where the user is waiting for something to happen but
+nothing does.
 """
 
 import asyncio
