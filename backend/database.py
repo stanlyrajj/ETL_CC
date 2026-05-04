@@ -122,6 +122,39 @@ class ProcessingLog(Base):
     paper: Mapped["Paper"] = relationship(back_populates="processing_logs")
 
 
+class GeneratedCache(Base):
+    """
+    Persistent cache for study and technical generated content.
+
+    cache_type : 'study_outline'  | 'study_section' | 'study_flashcards'
+                 | 'technical_section'
+    cache_key  : unique identifier within the type:
+                   study_outline    → paper_id
+                   study_section    → "{paper_id}::{section_title}"
+                   study_flashcards → paper_id
+                   technical_section→ "{paper_id}::{section_key}"
+    level      : the teaching level used when content was generated (informational only)
+    content    : markdown / JSON text — whatever the generator returned
+    """
+
+    __tablename__ = "generated_cache"
+
+    id:         Mapped[int]        = mapped_column(Integer, primary_key=True, autoincrement=True)
+    paper_id:   Mapped[str]        = mapped_column(ForeignKey("papers.paper_id", ondelete="CASCADE"))
+    cache_type: Mapped[str]        = mapped_column(String, index=True)
+    cache_key:  Mapped[str]        = mapped_column(String, index=True)
+    level:      Mapped[str | None] = mapped_column(String)
+    content:    Mapped[str]        = mapped_column(Text)
+    created_at: Mapped[datetime]   = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime]   = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    paper: Mapped["Paper"] = relationship()
+
+
 # ── Database class ────────────────────────────────────────────────────────────
 
 class Database:
@@ -409,6 +442,65 @@ class Database:
             .order_by(ProcessingLog.created_at)
         )
         return list(result.scalars().all())
+
+    # ── Generated content cache helpers ───────────────────────────────────────
+
+    async def get_cache(
+        self,
+        sess:       AsyncSession,
+        cache_type: str,
+        cache_key:  str,
+    ) -> "GeneratedCache | None":
+        result = await sess.execute(
+            select(GeneratedCache)
+            .where(
+                GeneratedCache.cache_type == cache_type,
+                GeneratedCache.cache_key  == cache_key,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def set_cache(
+        self,
+        sess:       AsyncSession,
+        paper_id:   str,
+        cache_type: str,
+        cache_key:  str,
+        content:    str,
+        level:      str | None = None,
+    ) -> "GeneratedCache":
+        existing = await self.get_cache(sess, cache_type, cache_key)
+        now = datetime.now(timezone.utc)
+        if existing is not None:
+            existing.content    = content
+            existing.level      = level
+            existing.updated_at = now
+            return existing
+        entry = GeneratedCache(
+            paper_id=paper_id,
+            cache_type=cache_type,
+            cache_key=cache_key,
+            level=level,
+            content=content,
+            created_at=now,
+            updated_at=now,
+        )
+        sess.add(entry)
+        return entry
+
+    async def delete_cache_for_paper(
+        self,
+        sess:     AsyncSession,
+        paper_id: str,
+        cache_type: str | None = None,
+    ) -> int:
+        """Delete cached entries for a paper. Pass cache_type to limit scope."""
+        from sqlalchemy import delete as sql_delete
+        stmt = sql_delete(GeneratedCache).where(GeneratedCache.paper_id == paper_id)
+        if cache_type is not None:
+            stmt = stmt.where(GeneratedCache.cache_type == cache_type)
+        result = await sess.execute(stmt)
+        return result.rowcount
 
 
 # Single shared instance — import this everywhere
