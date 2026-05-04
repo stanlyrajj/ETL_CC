@@ -7,8 +7,10 @@ import {
   createSession, listPapers, sendMessage, updateLevel, generateContent,
   generationHistory, deleteSession, exportCarousel, getShareLinks,
   getModels, selectModel,
+  getStudyCacheStatus, bustStudyCache, bustTechnicalCache,
   type Paper, type PaperPreview, type Session, type SessionDetail,
   type Message, type SocialItem, type ModelOption, type ChatMode,
+  type StudyCacheStatus,
 } from './lib/api'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -160,44 +162,66 @@ function MarkdownWithMermaid({ content, className = 'md-body' }: { content: stri
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Study Panel — with outline + section caching (Optimization 3)
+// Study Panel — SQLite-backed persistent cache (survives reload + restart)
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface StudySection { index: number; title: string; description: string }
 interface StudyOutline { summary: string; sections: StudySection[] }
 interface Flashcard    { front: string; back: string }
-type StudyPhase = 'idle' | 'loading_outline' | 'outline' | 'teaching' | 'flashcards' | 'error'
+type StudyPhase = 'idle' | 'loading_cache' | 'loading_outline' | 'outline' | 'teaching' | 'flashcards' | 'error'
 
-// Module-level cache keyed by paperId — survives mode switches
-// Cleared only when user explicitly clicks "Regenerate"
-const _studyCache: Map<string, {
-  outline:    StudyOutline
-  sections:   { title: string; content: string }[]
-  flashcards: Flashcard[]
-  phase:      StudyPhase
-}> = new Map()
-
-function StudyPanel({ paperId }: { paperId: string }) {
-  const cached = _studyCache.get(paperId)
-
-  const [phase, setPhase]               = useState<StudyPhase>(cached?.phase ?? 'idle')
-  const [outline, setOutline]           = useState<StudyOutline | null>(cached?.outline ?? null)
-  const [sections, setSections]         = useState<{ title: string; content: string }[]>(cached?.sections ?? [])
-  const [currentSection, setCurrentSection] = useState(cached?.sections.length ? cached.sections.length - 1 : 0)
+function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
+  const [phase, setPhase]               = useState<StudyPhase>('loading_cache')
+  const [outline, setOutline]           = useState<StudyOutline | null>(null)
+  const [sections, setSections]         = useState<{ title: string; content: string }[]>([])
+  const [currentSection, setCurrentSection] = useState(0)
   const [sectionLoading, setSectionLoading] = useState(false)
-  const [flashcards, setFlashcards]     = useState<Flashcard[]>(cached?.flashcards ?? [])
+  const [flashcards, setFlashcards]     = useState<Flashcard[]>([])
   const [flashcardsLoading, setFlashcardsLoading] = useState(false)
   const [cardIndex, setCardIndex]       = useState(0)
   const [flipped, setFlipped]           = useState(false)
   const [error, setError]               = useState('')
+  const [regenerating, setRegenerating] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // Persist state to module cache on every meaningful change
+  // On mount: check what's already in the SQLite cache and restore immediately
   useEffect(() => {
-    if (outline || sections.length > 0 || flashcards.length > 0) {
-      _studyCache.set(paperId, { outline: outline!, sections, flashcards, phase })
+    let cancelled = false
+    async function loadCache() {
+      try {
+        const status = await getStudyCacheStatus(paperId)
+        if (cancelled) return
+
+        if (status.flashcards) {
+          // Full lesson done — go straight to flashcards
+          if (status.outline) setOutline(status.outline.content)
+          const sectionList = status.sections.map(s => ({ title: s.section_title, content: s.content }))
+          setSections(sectionList)
+          setCurrentSection(Math.max(0, sectionList.length - 1))
+          setFlashcards(status.flashcards.cards)
+          setPhase('flashcards')
+        } else if (status.sections.length > 0 && status.outline) {
+          // Mid-lesson: restore to where they left off
+          setOutline(status.outline.content)
+          const sectionList = status.sections.map(s => ({ title: s.section_title, content: s.content }))
+          setSections(sectionList)
+          setCurrentSection(Math.max(0, sectionList.length - 1))
+          setPhase('teaching')
+        } else if (status.outline) {
+          // Outline generated, lesson not started
+          setOutline(status.outline.content)
+          setPhase('outline')
+        } else {
+          // Nothing cached
+          setPhase('idle')
+        }
+      } catch {
+        setPhase('idle')
+      }
     }
-  }, [paperId, outline, sections, flashcards, phase])
+    loadCache()
+    return () => { cancelled = true }
+  }, [paperId])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [sections, phase])
 
@@ -218,6 +242,17 @@ function StudyPanel({ paperId }: { paperId: string }) {
     }
   }
 
+  async function handleRegenerate() {
+    setRegenerating(true)
+    try {
+      await bustStudyCache(paperId)
+      setOutline(null); setSections([]); setFlashcards([]); setCurrentSection(0); setError('')
+      setPhase('idle')
+    } catch {
+      setError('Failed to clear cache. Please try again.')
+    } finally { setRegenerating(false) }
+  }
+
   async function startTeaching() {
     if (!outline) return
     setPhase('teaching'); setSections([]); setCurrentSection(0)
@@ -231,7 +266,7 @@ function StudyPanel({ paperId }: { paperId: string }) {
     try {
       const res = await fetch(`/api/study/${paperId}/section`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ section_title: section.title, section_description: section.description }),
+        body: JSON.stringify({ section_title: section.title, section_description: section.description, level }),
       })
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to load section') }
       const data = await res.json()
@@ -241,18 +276,14 @@ function StudyPanel({ paperId }: { paperId: string }) {
     } finally { setSectionLoading(false) }
   }
 
-  // Pre-fetch next section in background while user reads current (Optimization 6)
+  // Pre-fetch next section in background while user reads current
   useEffect(() => {
     if (!outline || phase !== 'teaching' || sectionLoading) return
-    const nextIndex = sections.length  // next section to load
+    const nextIndex = sections.length
     if (nextIndex >= outline.sections.length) return
-    // Only pre-fetch if user is on the last loaded section
     if (currentSection < sections.length - 1) return
-    // Don't pre-fetch if already loaded
     if (sections.length > currentSection + 1) return
-    const timer = setTimeout(() => {
-      loadSection(nextIndex)
-    }, 800)  // small delay so it doesn't compete with current render
+    const timer = setTimeout(() => { loadSection(nextIndex) }, 800)
     return () => clearTimeout(timer)
   }, [sections.length, currentSection, phase, sectionLoading, outline])
 
@@ -261,10 +292,7 @@ function StudyPanel({ paperId }: { paperId: string }) {
     const next = currentSection + 1
     if (next < outline.sections.length) {
       setCurrentSection(next)
-      // Section may already be pre-fetched — only load if not yet available
-      if (next >= sections.length) {
-        await loadSection(next)
-      }
+      if (next >= sections.length) { await loadSection(next) }
     } else {
       await fetchFlashcards()
     }
@@ -284,16 +312,25 @@ function StudyPanel({ paperId }: { paperId: string }) {
     } finally { setFlashcardsLoading(false) }
   }
 
-  function clearCache() {
-    _studyCache.delete(paperId)
-    setPhase('idle'); setOutline(null); setSections([]); setFlashcards([]); setCurrentSection(0); setError('')
-  }
-
   function prevCard() { setCardIndex(i => Math.max(0, i - 1)); setFlipped(false) }
   function nextCard() { setCardIndex(i => Math.min(flashcards.length - 1, i + 1)); setFlipped(false) }
 
   const totalSections = outline?.sections.length ?? 0
   const progress = totalSections > 0 ? (sections.length / totalSections) * 100 : 0
+
+  const RegenerateBtn = () => (
+    <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={handleRegenerate}
+      disabled={regenerating} style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>
+      {regenerating ? 'Clearing…' : '↺ Regenerate'}
+    </button>
+  )
+
+  if (phase === 'loading_cache') return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '16px' }}>
+      <Spinner size="spinner-lg" />
+      <p style={{ color: 'var(--text-3)', fontSize: '0.875rem' }}>Restoring session…</p>
+    </div>
+  )
 
   if (phase === 'idle') return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
@@ -315,16 +352,22 @@ function StudyPanel({ paperId }: { paperId: string }) {
   if (phase === 'error') return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
       <div className="notice notice-error" style={{ maxWidth: '400px' }}>{error}</div>
-      <button suppressHydrationWarning className="btn btn-ghost" onClick={clearCache}>Try again</button>
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button suppressHydrationWarning className="btn btn-ghost" onClick={() => { setPhase('idle'); setError('') }}>Try again</button>
+        <RegenerateBtn />
+      </div>
     </div>
   )
 
   if (phase === 'outline' && outline) return (
     <div style={{ padding: '24px', maxWidth: '680px', margin: '0 auto' }}>
       <div className="study-outline-card" style={{ marginBottom: '20px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--study-color)', display: 'inline-block' }} />
-          <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--study-color)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Your Learning Plan</span>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--study-color)', display: 'inline-block' }} />
+            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--study-color)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Your Learning Plan</span>
+          </div>
+          <RegenerateBtn />
         </div>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-2)', lineHeight: 1.6, marginBottom: '20px' }}>{outline.summary}</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -339,10 +382,7 @@ function StudyPanel({ paperId }: { paperId: string }) {
           ))}
         </div>
       </div>
-      <div style={{ display: 'flex', gap: '10px' }}>
-        <button suppressHydrationWarning className="btn btn-primary btn-lg" onClick={startTeaching} style={{ background: 'var(--study-color)', flex: 1 }}>Begin Learning →</button>
-        <button suppressHydrationWarning className="btn btn-ghost" onClick={clearCache}>Regenerate</button>
-      </div>
+      <button suppressHydrationWarning className="btn btn-primary btn-lg" onClick={startTeaching} style={{ background: 'var(--study-color)', width: '100%' }}>Begin Learning →</button>
     </div>
   )
 
@@ -355,12 +395,14 @@ function StudyPanel({ paperId }: { paperId: string }) {
         <div style={{ marginBottom: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
             <span style={{ fontSize: '0.8125rem', color: 'var(--study-color)', fontWeight: 500 }}>Section {currentSection + 1} of {totalSections}</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{Math.round(progress)}%</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{Math.round(progress)}%</span>
+              <RegenerateBtn />
+            </div>
           </div>
           <div className="study-progress-bar"><div className="study-progress-fill" style={{ width: `${progress}%` }} /></div>
         </div>
 
-        {/* Show only the current section — not all sections at once */}
         {sectionLoading && !currentContent ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '40px 0', color: 'var(--text-3)', fontSize: '0.875rem', justifyContent: 'center' }}>
             <Spinner /><span>Loading section…</span>
@@ -400,7 +442,10 @@ function StudyPanel({ paperId }: { paperId: string }) {
     return (
       <div style={{ padding: '24px', maxWidth: '600px', margin: '0 auto' }}>
         <div style={{ marginBottom: '20px', textAlign: 'center' }}>
-          <p style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--study-color)', marginBottom: '4px' }}>Flashcards</p>
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+            <p style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--study-color)' }}>Flashcards</p>
+            <RegenerateBtn />
+          </div>
           <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)' }}>Card {cardIndex + 1} of {flashcards.length} · Click card to reveal answer</p>
         </div>
         <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginBottom: '20px' }}>
@@ -424,7 +469,6 @@ function StudyPanel({ paperId }: { paperId: string }) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px' }}>
           <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={prevCard} disabled={cardIndex === 0}>← Previous</button>
-          <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={clearCache}>Restart</button>
           <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={nextCard} disabled={cardIndex === flashcards.length - 1}>Next →</button>
         </div>
       </div>
@@ -447,43 +491,88 @@ const TECHNICAL_SECTION_DEFS = [
 ]
 
 interface TechnicalSection { key: string; label: string; content: string }
-type TechnicalPhase = 'idle' | 'analyzing' | 'done' | 'error'
-
-// Module-level cache — survives mode switches, cleared on "Re-analyze"
-const _technicalCache: Map<string, {
-  sections: TechnicalSection[]
-  phase:    TechnicalPhase
-}> = new Map()
+type TechnicalPhase = 'idle' | 'loading_cache' | 'analyzing' | 'done' | 'error'
 
 function TechnicalPanel({ paperId }: { paperId: string }) {
-  const cached = _technicalCache.get(paperId)
-
-  const [phase, setPhase]           = useState<TechnicalPhase>(cached?.phase ?? 'idle')
-  const [sections, setSections]     = useState<TechnicalSection[]>(cached?.sections ?? [])
-  const [activeKey, setActiveKey]   = useState(cached?.sections[0]?.key ?? 'overview')
+  const [phase, setPhase]           = useState<TechnicalPhase>('loading_cache')
+  const [sections, setSections]     = useState<TechnicalSection[]>([])
+  const [activeKey, setActiveKey]   = useState('overview')
   const [loadingKey, setLoadingKey] = useState<string | null>(null)
   const [error, setError]           = useState('')
+  const [regenerating, setRegenerating] = useState(false)
   const esRef = useRef<EventSource | null>(null)
 
+  // On mount: POST /analyze — backend returns cached instantly or starts SSE
   useEffect(() => {
-    if (sections.length > 0) {
-      _technicalCache.set(paperId, { sections, phase })
+    let cancelled = false
+    async function init() {
+      try {
+        const res = await fetch(`/api/technical/${paperId}/analyze`, { method: 'POST' })
+        if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to start analysis') }
+        const data = await res.json()
+
+        if (cancelled) return
+
+        if (data.cached === true) {
+          // All sections already in SQLite — render immediately
+          setSections(data.sections.map((s: { section_key: string; section_label: string; content: string }) => ({
+            key: s.section_key, label: s.section_label, content: s.content,
+          })))
+          setActiveKey(data.sections[0]?.section_key ?? 'overview')
+          setPhase('done')
+          return
+        }
+
+        // SSE path — new generation
+        setPhase('analyzing')
+        setLoadingKey('overview')
+        await new Promise<void>((resolve, reject) => {
+          const es = new EventSource(`${BACKEND}/api/technical/${data.queue_key}/progress`)
+          esRef.current = es
+          es.addEventListener('section', (e: MessageEvent) => {
+            if (cancelled) { es.close(); resolve(); return }
+            try {
+              const d = JSON.parse(e.data)
+              setSections(prev => [...prev, { key: d.section_key, label: d.section_label, content: d.content }])
+              setActiveKey(d.section_key)
+              const nextIdx = d.section_index + 1
+              setLoadingKey(nextIdx < TECHNICAL_SECTION_DEFS.length ? TECHNICAL_SECTION_DEFS[nextIdx].key : null)
+            } catch { /* ignore */ }
+          })
+          es.addEventListener('section_failed', (e: MessageEvent) => {
+            try {
+              const d = JSON.parse(e.data)
+              setSections(prev => [...prev, { key: d.section_key, label: d.section_label, content: `*This section could not be generated: ${d.error}*` }])
+            } catch { /* ignore */ }
+          })
+          es.addEventListener('done', () => { resolve(); es.close() })
+          es.onerror = () => { reject(new Error('SSE connection lost')); es.close() }
+        })
+        if (!cancelled) { setPhase('done'); setLoadingKey(null) }
+
+      } catch (err: unknown) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Analysis failed.')
+          setPhase('error'); setLoadingKey(null)
+        }
+      }
     }
-  }, [paperId, sections, phase])
+    init()
+    return () => { cancelled = true; esRef.current?.close() }
+  }, [paperId])
 
-  useEffect(() => () => { esRef.current?.close() }, [])
-
-  async function startAnalysis() {
-    setPhase('analyzing'); setSections([]); setError(''); setActiveKey('overview')
-    _technicalCache.delete(paperId)
+  async function handleRegenerate() {
+    setRegenerating(true)
     try {
+      await bustTechnicalCache(paperId)
+      setSections([]); setError(''); setActiveKey('overview'); setLoadingKey('overview')
+      setPhase('analyzing')
       const res = await fetch(`/api/technical/${paperId}/analyze`, { method: 'POST' })
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to start analysis') }
       const data = await res.json()
-      const qk   = data.queue_key
-      setLoadingKey('overview')
+      // After cache bust, should always be SSE path
       await new Promise<void>((resolve, reject) => {
-        const es = new EventSource(`${BACKEND}/api/technical/${qk}/progress`)
+        const es = new EventSource(`${BACKEND}/api/technical/${data.queue_key}/progress`)
         esRef.current = es
         es.addEventListener('section', (e: MessageEvent) => {
           try {
@@ -505,14 +594,19 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
       })
       setPhase('done'); setLoadingKey(null)
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Analysis failed.')
+      setError(err instanceof Error ? err.message : 'Re-analysis failed.')
       setPhase('error'); setLoadingKey(null)
-    }
+    } finally { setRegenerating(false) }
   }
 
-  function clearCache() { _technicalCache.delete(paperId); setPhase('idle'); setSections([]); setError('') }
-
   const activeSection = sections.find(s => s.key === activeKey) ?? sections[0] ?? null
+
+  if (phase === 'loading_cache') return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '16px' }}>
+      <Spinner size="spinner-lg" />
+      <p style={{ color: 'var(--text-3)', fontSize: '0.875rem' }}>Restoring analysis…</p>
+    </div>
+  )
 
   if (phase === 'idle') return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
@@ -527,14 +621,18 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
           ))}
         </div>
       </div>
-      <button suppressHydrationWarning className="btn btn-primary btn-lg" onClick={startAnalysis} style={{ background: 'var(--technical-color)', minWidth: '220px' }}>Analyze Paper</button>
+      <button suppressHydrationWarning className="btn btn-primary btn-lg" onClick={handleRegenerate} style={{ background: 'var(--technical-color)', minWidth: '220px' }}>Analyze Paper</button>
     </div>
   )
 
   if (phase === 'error') return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
       <div className="notice notice-error" style={{ maxWidth: '400px' }}>{error}</div>
-      <button suppressHydrationWarning className="btn btn-ghost" onClick={clearCache}>Try again</button>
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button suppressHydrationWarning className="btn btn-ghost" onClick={() => { setPhase('idle'); setError('') }}>Try again</button>
+        <button suppressHydrationWarning className="btn btn-ghost" onClick={handleRegenerate} disabled={regenerating}
+          style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>{regenerating ? 'Clearing…' : '↺ Regenerate'}</button>
+      </div>
     </div>
   )
 
@@ -557,16 +655,20 @@ function TechnicalPanel({ paperId }: { paperId: string }) {
             </button>
           )
         })}
-        {phase === 'done' && (
-          <div style={{ padding: '12px 16px', marginTop: 'auto' }}>
-            <button suppressHydrationWarning className="btn btn-ghost btn-sm btn-full" onClick={clearCache} style={{ fontSize: '0.75rem' }}>Re-analyze</button>
-          </div>
-        )}
-        {phase === 'analyzing' && (
-          <div style={{ padding: '12px 16px', marginTop: 'auto' }}>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: '6px' }}><Spinner size="spinner-sm" />Analyzing…</div>
-          </div>
-        )}
+        <div style={{ padding: '12px 16px', marginTop: 'auto' }}>
+          {phase === 'done' && (
+            <button suppressHydrationWarning className="btn btn-ghost btn-sm btn-full"
+              onClick={handleRegenerate} disabled={regenerating}
+              style={{ fontSize: '0.75rem' }}>
+              {regenerating ? '↺ Clearing…' : '↺ Re-analyze'}
+            </button>
+          )}
+          {phase === 'analyzing' && (
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Spinner size="spinner-sm" />Analyzing…
+            </div>
+          )}
+        </div>
       </nav>
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
         {sections.length === 0 && phase === 'analyzing' && (
@@ -1490,9 +1592,11 @@ function ChatView({ initialPapers, onNewSearch, sessions, setSessions, sidebarCo
     const tempMsg: Message = { id: Date.now(), role: 'user', content: text, level, created_at: null }
     setMessages(prev => [...prev, tempMsg])
     try {
-      const res = await sendMessage(activeSession.session_id, text, level)
-      const assistantMsg: Message = { id: Date.now() + 1, role: 'assistant', content: res.response, level, created_at: null }
-      setMessages(prev => [...prev, assistantMsg])
+      await sendMessage(activeSession.session_id, text, level)
+      // Re-fetch the session to get both messages with their real DB ids and timestamps.
+      // This is the authoritative state — no ephemeral IDs, no missing assistant message on reload.
+      const refreshed = await getSession(activeSession.session_id)
+      setMessages(refreshed.session.messages)
       setSessions(prev => prev.map(s => s.session_id === activeSession.session_id ? { ...s, last_active_at: new Date().toISOString() } : s))
     } catch (err: unknown) {
       setChatError(err instanceof Error ? err.message : 'Message failed.')
@@ -1586,7 +1690,7 @@ function ChatView({ initialPapers, onNewSearch, sessions, setSessions, sidebarCo
 
             {/* Study panel */}
             {chatMode === 'study' && activePaper && (
-              <div style={{ flex: 1, overflowY: 'auto' }}><StudyPanel paperId={activePaper.paper_id} /></div>
+              <div style={{ flex: 1, overflowY: 'auto' }}><StudyPanel paperId={activePaper.paper_id} level={level} /></div>
             )}
 
             {/* Technical panel */}
