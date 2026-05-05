@@ -3,12 +3,21 @@
 
 const BASE = '/api'
 
+// If APP_TOKEN is set in frontend/.env.local as NEXT_PUBLIC_APP_TOKEN,
+// it is sent on every request as X-App-Token so the backend auth middleware
+// accepts it. Leave unset when the backend has no APP_TOKEN configured.
+const APP_TOKEN = process.env.NEXT_PUBLIC_APP_TOKEN ?? ''
+
+function authHeaders(): Record<string, string> {
+  return APP_TOKEN ? { 'X-App-Token': APP_TOKEN } : {}
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...options.headers },
     ...options,
   })
   if (!res.ok) {
@@ -142,7 +151,7 @@ export async function uploadPaper(
   const fd = new FormData()
   fd.append('file', file)
   fd.append('topic', topic)
-  const res = await fetch(`${BASE}/papers/upload`, { method: 'POST', body: fd })
+  const res = await fetch(`${BASE}/papers/upload`, { method: 'POST', body: fd, headers: authHeaders() })
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try { const b = await res.json(); detail = b.detail || detail } catch { /* ignore */ }
@@ -229,18 +238,18 @@ export interface TechnicalCachedSection {
 }
 
 export type TechnicalAnalyzeResponse =
-  {
-    cached:     true
-    paper_id:   string
-    sections:   TechnicalCachedSection[]
-  }
- | {
-    cached:     false
-    queue_key:  string
-    paper_id:   string
-    sections:   { key: string; label: string }[]
-    message:    string
-  }
+  | {
+      cached:   true
+      paper_id: string
+      sections: TechnicalCachedSection[]
+    }
+  | {
+      cached:    false
+      queue_key: string
+      paper_id:   string
+      sections:   { key: string; label: string }[]
+      message:    string
+    }
 
 export async function bustTechnicalCache(paperId: string): Promise<{ success: boolean; deleted: number }> {
   return request(`/technical/${paperId}/cache`, { method: 'DELETE' })
