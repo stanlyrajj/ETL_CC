@@ -122,6 +122,20 @@ class Config:
         # ── CORS ──────────────────────────────────────────────────────────────
         self.CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "http://localhost:3000")
 
+        # ── Network binding ───────────────────────────────────────────────────
+        # HOST defaults to 127.0.0.1 (loopback only) for safety.
+        # Only set HOST=0.0.0.0 if you explicitly need LAN access and understand
+        # that anyone on your network can then reach all your papers and chat history.
+        self.HOST: str = os.getenv("HOST", "127.0.0.1")
+        self.PORT: int = _int_env("PORT", "8000")
+
+        # ── Access token ──────────────────────────────────────────────────────
+        # A shared secret that the frontend sends on every request.
+        # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+        # Leave empty to disable token auth (only safe when HOST=127.0.0.1 and
+        # you are the only user of the machine).
+        self.APP_TOKEN: str = os.getenv("APP_TOKEN", "")
+
         # ── Retries ───────────────────────────────────────────────────────────
         self.MAX_RETRIES: int = _int_env("MAX_RETRIES", "3")
 
@@ -171,6 +185,15 @@ class Config:
             for err in errors:
                 print(f"  - {err}", file=sys.stderr)
             sys.exit(1)
+
+        # Non-fatal warnings
+        if self.HOST != "127.0.0.1" and not self.APP_TOKEN:
+            print(
+                "WARNING: HOST is not 127.0.0.1 and APP_TOKEN is not set. "
+                "Anyone on your network can access all papers and chat history. "
+                "Set APP_TOKEN in your .env file.",
+                file=sys.stderr,
+            )
 
     def create_dirs(self):
         """Create output directories if they don't exist."""
