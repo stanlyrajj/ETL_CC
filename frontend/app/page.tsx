@@ -1490,6 +1490,163 @@ function SessionSidebar({ sessions, activeSessionId, onSelect, onDelete, onNewSe
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Resizable chat input — drag the top edge to make it taller or shorter
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CHAT_INPUT_MIN = 56   // px — single-line minimum
+const CHAT_INPUT_MAX = 320  // px — hard ceiling
+
+function ResizableChatInput({
+  input, setInput, onSubmit, disabled, error,
+}: {
+  input: string
+  setInput: (v: string) => void
+  onSubmit: (e: React.FormEvent) => void
+  disabled: boolean
+  error: string
+}) {
+  const [height, setHeight] = useState(56)
+  const dragging = useRef(false)
+  const startY   = useRef(0)
+  const startH   = useRef(0)
+
+  function onMouseDown(e: React.MouseEvent) {
+    dragging.current = true
+    startY.current   = e.clientY
+    startH.current   = height
+    e.preventDefault()
+  }
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!dragging.current) return
+      const delta = startY.current - e.clientY          // drag up = bigger
+      const next  = Math.min(CHAT_INPUT_MAX, Math.max(CHAT_INPUT_MIN, startH.current + delta))
+      setHeight(next)
+    }
+    function onUp() { dragging.current = false }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+  }, [])
+
+  const multiLine = height > CHAT_INPUT_MIN + 10
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-2)', flexShrink: 0 }}>
+      {/* Drag handle */}
+      <div
+        onMouseDown={onMouseDown}
+        title="Drag to resize input"
+        style={{
+          height: '6px', cursor: 'row-resize', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', userSelect: 'none',
+        }}
+      >
+        <div style={{ width: '32px', height: '3px', borderRadius: '2px', background: 'var(--border)', transition: 'background 0.15s' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--accent)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--border)')}
+        />
+      </div>
+
+      <div style={{ padding: '8px 20px 14px' }}>
+        {error && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{error}</div>}
+        <form onSubmit={onSubmit} style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+          {multiLine ? (
+            <textarea
+              suppressHydrationWarning
+              className="input"
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSubmit(e as unknown as React.FormEvent) } }}
+              placeholder={disabled ? 'Waiting for a session…' : 'Ask anything about this paper… (Shift+Enter for newline)'}
+              disabled={disabled}
+              maxLength={2000}
+              style={{ flex: 1, height: `${height - 22}px`, resize: 'none', lineHeight: 1.5, fontFamily: 'var(--font-sans)', fontSize: '0.9rem' }}
+            />
+          ) : (
+            <input
+              suppressHydrationWarning
+              className="input"
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              placeholder={disabled ? 'Waiting for a session…' : 'Ask anything about this paper…'}
+              disabled={disabled}
+              maxLength={2000}
+              style={{ flex: 1 }}
+            />
+          )}
+          <button suppressHydrationWarning type="submit" className="btn btn-primary"
+            disabled={disabled || !input.trim()} style={{ flexShrink: 0 }}>
+            <IconSend />
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resizable generate panel — drag the left edge to make it wider or narrower
+// ─────────────────────────────────────────────────────────────────────────────
+
+const GEN_PANEL_MIN = 240   // px
+const GEN_PANEL_MAX = 680   // px
+const GEN_PANEL_DEFAULT = 300
+
+function ResizableGeneratePanel({ children }: { children: React.ReactNode }) {
+  const [width, setWidth] = useState(GEN_PANEL_DEFAULT)
+  const dragging = useRef(false)
+  const startX   = useRef(0)
+  const startW   = useRef(0)
+
+  function onMouseDown(e: React.MouseEvent) {
+    dragging.current = true
+    startX.current   = e.clientX
+    startW.current   = width
+    e.preventDefault()
+  }
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!dragging.current) return
+      const delta = startX.current - e.clientX          // drag left = wider
+      const next  = Math.min(GEN_PANEL_MAX, Math.max(GEN_PANEL_MIN, startW.current + delta))
+      setWidth(next)
+    }
+    function onUp() { dragging.current = false }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+  }, [])
+
+  return (
+    <div className="fade-in" style={{ width: `${width}px`, flexShrink: 0, display: 'flex', borderLeft: '1px solid var(--border)' }}>
+      {/* Drag handle — sits on the left edge of the panel */}
+      <div
+        onMouseDown={onMouseDown}
+        title="Drag to resize panel"
+        style={{
+          width: '6px', flexShrink: 0, cursor: 'col-resize', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', userSelect: 'none',
+        }}
+      >
+        <div
+          style={{ width: '3px', height: '32px', borderRadius: '2px', background: 'var(--border)', transition: 'background 0.15s' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--accent)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--border)')}
+        />
+      </div>
+
+      {/* Panel content */}
+      <div style={{ flex: 1, overflowY: 'auto', background: 'var(--bg)', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // VIEW 4: Chat
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1739,18 +1896,12 @@ function ChatView({ initialPapers, onNewSearch, sessions, setSessions, sidebarCo
                   <div ref={bottomRef} />
                 </div>
 
-                <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--bg-2)', flexShrink: 0 }}>
-                  {chatError && <div className="notice notice-error" style={{ marginBottom: '10px' }}>{chatError}</div>}
-                  <form onSubmit={handleSend} style={{ display: 'flex', gap: '8px' }}>
-                    <input suppressHydrationWarning className="input" value={input} onChange={e => setInput(e.target.value)}
-                      placeholder={!activeSession ? 'Waiting for a session…' : 'Ask anything about this paper…'}
-                      disabled={!activeSession || sending} maxLength={2000} style={{ flex: 1 }} />
-                    <button suppressHydrationWarning type="submit" className="btn btn-primary"
-                      disabled={!activeSession || !input.trim() || sending} style={{ flexShrink: 0 }}>
-                      <IconSend />
-                    </button>
-                  </form>
-                </div>
+                <ResizableChatInput
+                  input={input} setInput={setInput}
+                  onSubmit={handleSend}
+                  disabled={!activeSession || sending}
+                  error={chatError}
+                />
               </>
             )}
 
@@ -1761,14 +1912,14 @@ function ChatView({ initialPapers, onNewSearch, sessions, setSessions, sidebarCo
             )}
           </div>
 
-          {/* Generate panel */}
+          {/* Generate panel — resizable via drag handle */}
           {generateOpen && (
-            <div className="fade-in" style={{ width: '300px', flexShrink: 0, borderLeft: '1px solid var(--border)', overflowY: 'auto', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+            <ResizableGeneratePanel>
               {paperIsReady
                 ? <GenerationPanel paperId={activePaper!.paper_id} />
                 : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '120px', padding: '20px' }}><p style={{ color: 'var(--text-3)', fontSize: '0.8125rem', textAlign: 'center', lineHeight: 1.6 }}>Paper must finish processing before you can generate content.</p></div>
               }
-            </div>
+            </ResizableGeneratePanel>
           )}
         </div>
       </div>
