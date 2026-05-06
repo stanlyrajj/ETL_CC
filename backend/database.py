@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
 from sqlalchemy import (
-    JSON, DateTime, Float, ForeignKey, Integer, String, Text, delete, select,
-    update,
+    JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint,
+    delete, select, update,
 )
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -135,9 +136,15 @@ class GeneratedCache(Base):
                    technical_section→ "{paper_id}::{section_key}"
     level      : the teaching level used when content was generated (informational only)
     content    : markdown / JSON text — whatever the generator returned
+
+    The UNIQUE constraint on (cache_type, cache_key) is the enforcement point
+    that makes the SQLite upsert in set_cache atomic and race-free.
     """
 
     __tablename__ = "generated_cache"
+    __table_args__ = (
+        UniqueConstraint("cache_type", "cache_key", name="uq_cache_type_key"),
+    )
 
     id:         Mapped[int]        = mapped_column(Integer, primary_key=True, autoincrement=True)
     paper_id:   Mapped[str]        = mapped_column(ForeignKey("papers.paper_id", ondelete="CASCADE"))
@@ -185,6 +192,8 @@ class Database:
 
         # Migration-safe: add mode column to existing databases that predate it
         await self._migrate_add_mode_column()
+        # Migration-safe: add unique index to generated_cache for existing DBs
+        await self._migrate_generated_cache_unique_index()
 
     async def _migrate_add_mode_column(self) -> None:
         """
@@ -204,6 +213,46 @@ class Database:
                         "ALTER TABLE chat_sessions ADD COLUMN mode VARCHAR DEFAULT 'standard'"
                     )
                 )
+
+    async def _migrate_generated_cache_unique_index(self) -> None:
+        """
+        Ensure the unique index on generated_cache(cache_type, cache_key) exists.
+
+        On a fresh database create_all already creates it via the model's
+        __table_args__ UniqueConstraint.  On an existing database that was
+        created before this constraint was added we need to:
+          1. Deduplicate any rows that would violate the new constraint
+             (keep the most recently updated one).
+          2. Create the index.
+
+        SQLite does not support ALTER TABLE ADD CONSTRAINT, so the index is
+        created with CREATE UNIQUE INDEX IF NOT EXISTS instead.
+        """
+        import sqlalchemy as sa
+        async with self._engine.begin() as conn:
+            # Check whether the index already exists
+            result = await conn.execute(
+                sa.text("SELECT name FROM sqlite_master WHERE type='index' AND name='uq_cache_type_key'")
+            )
+            if result.fetchone() is not None:
+                return  # Already in place — nothing to do
+
+            # Remove duplicate (cache_type, cache_key) pairs, keeping the row
+            # with the highest updated_at.  This runs only once on upgrade.
+            await conn.execute(sa.text("""
+                DELETE FROM generated_cache
+                WHERE id NOT IN (
+                    SELECT MAX(id)
+                    FROM generated_cache
+                    GROUP BY cache_type, cache_key
+                )
+            """))
+
+            # Now safe to create the unique index
+            await conn.execute(sa.text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_cache_type_key
+                ON generated_cache (cache_type, cache_key)
+            """))
 
     async def close(self):
         if self._engine:
@@ -468,25 +517,42 @@ class Database:
         cache_key:  str,
         content:    str,
         level:      str | None = None,
-    ) -> "GeneratedCache":
-        existing = await self.get_cache(sess, cache_type, cache_key)
+    ) -> None:
+        """
+        Atomically insert or update a cache entry.
+
+        Uses SQLite's INSERT OR REPLACE (via sqlalchemy.dialects.sqlite.insert
+        with on_conflict_do_update) so the entire operation is a single
+        statement — no read-then-write gap, no duplicate-row risk even under
+        concurrent requests hitting the same (cache_type, cache_key).
+
+        The UNIQUE constraint on (cache_type, cache_key) is what makes the
+        ON CONFLICT clause fire correctly.
+        """
         now = datetime.now(timezone.utc)
-        if existing is not None:
-            existing.content    = content
-            existing.level      = level
-            existing.updated_at = now
-            return existing
-        entry = GeneratedCache(
-            paper_id=paper_id,
-            cache_type=cache_type,
-            cache_key=cache_key,
-            level=level,
-            content=content,
-            created_at=now,
-            updated_at=now,
+        stmt = (
+            sqlite_insert(GeneratedCache)
+            .values(
+                paper_id=paper_id,
+                cache_type=cache_type,
+                cache_key=cache_key,
+                level=level,
+                content=content,
+                created_at=now,
+                updated_at=now,
+            )
+            .on_conflict_do_update(
+                index_elements=["cache_type", "cache_key"],  # matches the UniqueConstraint
+                set_={
+                    "content":    content,
+                    "level":      level,
+                    "updated_at": now,
+                    # paper_id and created_at are intentionally NOT updated —
+                    # the original paper association and creation time are preserved.
+                },
+            )
         )
-        sess.add(entry)
-        return entry
+        await sess.execute(stmt)
 
     async def delete_cache_for_paper(
         self,
