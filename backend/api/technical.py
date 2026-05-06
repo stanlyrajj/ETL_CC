@@ -135,19 +135,21 @@ async def start_technical_analysis(paper_id: str):
     Returns one of two shapes:
       { cached: true,  sections: [{section_key, section_label, content}, ...] }
       { cached: false, queue_key: "...", paper_id: "...", sections: [...defs...] }
+
+    Paper validation and cache check happen in a single session.
     """
     async with db.session() as sess:
         paper = await db.get_paper(sess, paper_id)
+        if paper is None:
+            raise HTTPException(status_code=404, detail=f"Paper not found: {paper_id!r}")
+        if paper.pipeline_stage != "processed":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Paper is not ready yet. Current stage: {paper.pipeline_stage!r}.",
+            )
 
-    if paper is None:
-        raise HTTPException(status_code=404, detail=f"Paper not found: {paper_id!r}")
-    if paper.pipeline_stage != "processed":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Paper is not ready yet. Current stage: {paper.pipeline_stage!r}.",
-        )
-
-    # Fast path — all sections already cached
+    # Fast path — all sections already cached (each get_cache is its own read,
+    # but all inside one session for consistency)
     cached_sections = await _load_all_from_cache(paper_id)
     if cached_sections is not None:
         logger.info("Technical analysis cache hit: paper=%s", paper_id)
@@ -187,13 +189,12 @@ async def bust_technical_cache(paper_id: str):
     """
     Delete all cached technical sections for a paper.
     The next POST /analyze will regenerate from scratch.
+    Paper check and delete happen in a single session.
     """
     async with db.session() as sess:
         paper = await db.get_paper(sess, paper_id)
-    if paper is None:
-        raise HTTPException(status_code=404, detail="Paper not found.")
-
-    async with db.session() as sess:
+        if paper is None:
+            raise HTTPException(status_code=404, detail="Paper not found.")
         result = await sess.execute(
             sql_delete(GeneratedCache).where(
                 GeneratedCache.paper_id == paper_id,
