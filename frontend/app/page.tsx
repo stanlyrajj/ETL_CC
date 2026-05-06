@@ -193,19 +193,33 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
         if (cancelled) return
 
         if (status.flashcards) {
-          // Full lesson done — go straight to flashcards
+          // Full lesson done — restore everything and go to flashcards
           if (status.outline) setOutline(status.outline.content)
-          const sectionList = status.sections.map(s => ({ title: s.section_title, content: s.content }))
-          setSections(sectionList)
-          setCurrentSection(Math.max(0, sectionList.length - 1))
+          const totalSecs = status.outline?.content.sections.length ?? status.sections.length
+          const sectionArray: { title: string; content: string }[] = new Array(totalSecs)
+          status.sections.forEach(s => {
+            if (s.section_index < totalSecs) {
+              sectionArray[s.section_index] = { title: s.section_title, content: s.content }
+            }
+          })
+          setSections(sectionArray)
+          setCurrentSection(Math.max(0, totalSecs - 1))
           setFlashcards(status.flashcards.cards)
           setPhase('flashcards')
         } else if (status.sections.length > 0 && status.outline) {
-          // Mid-lesson: restore to where they left off
+          // Mid-lesson: restore sections into their correct index positions
           setOutline(status.outline.content)
-          const sectionList = status.sections.map(s => ({ title: s.section_title, content: s.content }))
-          setSections(sectionList)
-          setCurrentSection(Math.max(0, sectionList.length - 1))
+          const totalSecs = status.outline.content.sections.length
+          const sectionArray: { title: string; content: string }[] = new Array(totalSecs)
+          status.sections.forEach(s => {
+            if (s.section_index < totalSecs) {
+              sectionArray[s.section_index] = { title: s.section_title, content: s.content }
+            }
+          })
+          setSections(sectionArray)
+          // Land on the last completed section
+          const lastDone = Math.max(...status.sections.map(s => s.section_index))
+          setCurrentSection(lastDone)
           setPhase('teaching')
         } else if (status.outline) {
           // Outline generated, lesson not started
@@ -255,8 +269,13 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
 
   async function startTeaching() {
     if (!outline) return
-    setPhase('teaching'); setSections([]); setCurrentSection(0)
-    await loadSection(0)
+    // If sections are already cached (restored on mount), go straight to section 0
+    // without wiping. Only reset if genuinely starting fresh.
+    if (sections.length === 0) {
+      setCurrentSection(0)
+      await loadSection(0)
+    }
+    setPhase('teaching')
   }
 
   async function loadSection(index: number) {
@@ -266,11 +285,21 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
     try {
       const res = await fetch(`/api/study/${paperId}/section`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ section_title: section.title, section_description: section.description, level }),
+        body: JSON.stringify({
+          section_title:       section.title,
+          section_description: section.description,
+          level,
+          section_index:       index,   // stored in DB for correct ordering on restore
+        }),
       })
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to load section') }
       const data = await res.json()
-      setSections(prev => [...prev, { title: section.title, content: data.content }])
+      setSections(prev => {
+        // Place at exact index — fill gaps with null placeholders if needed
+        const next = [...prev]
+        next[index] = { title: section.title, content: data.content }
+        return next
+      })
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load section.')
     } finally { setSectionLoading(false) }
@@ -279,20 +308,19 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
   // Pre-fetch next section in background while user reads current
   useEffect(() => {
     if (!outline || phase !== 'teaching' || sectionLoading) return
-    const nextIndex = sections.length
+    const nextIndex = currentSection + 1
     if (nextIndex >= outline.sections.length) return
-    if (currentSection < sections.length - 1) return
-    if (sections.length > currentSection + 1) return
+    if (sections[nextIndex]) return  // already loaded (cached or pre-fetched)
     const timer = setTimeout(() => { loadSection(nextIndex) }, 800)
     return () => clearTimeout(timer)
-  }, [sections.length, currentSection, phase, sectionLoading, outline])
+  }, [sections, currentSection, phase, sectionLoading, outline])
 
   async function nextSection() {
     if (!outline) return
     const next = currentSection + 1
     if (next < outline.sections.length) {
       setCurrentSection(next)
-      if (next >= sections.length) { await loadSection(next) }
+      if (!sections[next]) { await loadSection(next) }  // load only if not already cached
     } else {
       await fetchFlashcards()
     }
@@ -315,8 +343,9 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
   function prevCard() { setCardIndex(i => Math.max(0, i - 1)); setFlipped(false) }
   function nextCard() { setCardIndex(i => Math.min(flashcards.length - 1, i + 1)); setFlipped(false) }
 
-  const totalSections = outline?.sections.length ?? 0
-  const progress = totalSections > 0 ? (sections.length / totalSections) * 100 : 0
+  const totalSections  = outline?.sections.length ?? 0
+  const loadedSections = sections.filter(Boolean).length
+  const progress = totalSections > 0 ? (loadedSections / totalSections) * 100 : 0
 
   const RegenerateBtn = () => (
     <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={handleRegenerate}

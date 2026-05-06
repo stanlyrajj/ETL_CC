@@ -217,7 +217,7 @@ export async function sendMessage(
 export interface StudyCacheStatus {
   paper_id:   string
   outline:    { content: { summary: string; sections: { index: number; title: string; description: string }[] }; created_at: string } | null
-  sections:   { section_title: string; content: string; level: string | null; created_at: string }[]
+  sections:   { section_title: string; content: string; level: string | null; section_index: number; created_at: string }[]
   flashcards: { cards: { front: string; back: string }[]; created_at: string } | null
 }
 
@@ -237,19 +237,17 @@ export interface TechnicalCachedSection {
   content:       string
 }
 
-export type TechnicalAnalyzeResponse =
-  | {
-      cached:   true
-      paper_id: string
-      sections: TechnicalCachedSection[]
-    }
-  | {
-      cached:    false
-      queue_key: string
-      paper_id:   string
-      sections:   { key: string; label: string }[]
-      message:    string
-    }
+export type TechnicalAnalyzeResponse = {
+  cached:     true
+  paper_id:   string
+  sections:   TechnicalCachedSection[]
+} | {
+  cached:     false
+  queue_key:  string
+  paper_id:   string
+  sections:   { key: string; label: string }[]
+  message:    string
+}
 
 export async function bustTechnicalCache(paperId: string): Promise<{ success: boolean; deleted: number }> {
   return request(`/technical/${paperId}/cache`, { method: 'DELETE' })
