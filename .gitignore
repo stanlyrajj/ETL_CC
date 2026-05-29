@@ -1,47 +1,65 @@
-# Environment
+# ── Environment ───────────────────────────────────────────────────────────────
 .env
 .env.local
 .env.*.local
-.env.example
+# Keep examples — they are documentation, not secrets
+!.env.example
+!.env.local.example
 
-# Python
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 .venv/
 venv/
+env/
 my_env/
 *.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Database
+# ── Local data (user-generated, not part of the codebase) ────────────────────
 *.db
 *.sqlite
 researchrag.db
 downloads/
-
-# Generated data
 chroma_db/
-downloads/
 carousel_outputs/
 
-# Node
+# ── Node ──────────────────────────────────────────────────────────────────────
 node_modules/
-next-env.d.ts
 .next/
 out/
-package-lock.json
+next-env.d.ts
+# Keep package-lock.json for reproducible installs
+# package-lock.json   ← intentionally not ignored
 
-# OS
+# ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
 Thumbs.db
+ehthumbs.db
+desktop.ini
 
-# IDE
+# ── IDE ───────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
 
-# Logs
+# ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
+logs/
 
-#Additional files to ignore
+# ── Misc ──────────────────────────────────────────────────────────────────────
 *.bak
+*.tmp
+*.orig
