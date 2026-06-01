@@ -163,7 +163,6 @@ function MarkdownWithMermaid({ content, className = 'md-body' }: { content: stri
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Study Panel — SQLite-backed persistent cache (survives reload + restart)
-// Option D: clickable outline TOC, back-to-outline button, free section jumping
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface StudySection { index: number; title: string; description: string }
@@ -172,20 +171,20 @@ interface Flashcard    { front: string; back: string }
 type StudyPhase = 'idle' | 'loading_cache' | 'loading_outline' | 'outline' | 'teaching' | 'flashcards' | 'error'
 
 function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
-  const [phase, setPhase]                   = useState<StudyPhase>('loading_cache')
-  const [outline, setOutline]               = useState<StudyOutline | null>(null)
-  const [sections, setSections]             = useState<({ title: string; content: string } | undefined)[]>([])
+  const [phase, setPhase]               = useState<StudyPhase>('loading_cache')
+  const [outline, setOutline]           = useState<StudyOutline | null>(null)
+  const [sections, setSections]         = useState<{ title: string; content: string }[]>([])
   const [currentSection, setCurrentSection] = useState(0)
   const [sectionLoading, setSectionLoading] = useState(false)
-  const [flashcards, setFlashcards]         = useState<Flashcard[]>([])
+  const [flashcards, setFlashcards]     = useState<Flashcard[]>([])
   const [flashcardsLoading, setFlashcardsLoading] = useState(false)
-  const [cardIndex, setCardIndex]           = useState(0)
-  const [flipped, setFlipped]               = useState(false)
-  const [error, setError]                   = useState('')
-  const [regenerating, setRegenerating]     = useState(false)
-  const contentRef = useRef<HTMLDivElement>(null)
+  const [cardIndex, setCardIndex]       = useState(0)
+  const [flipped, setFlipped]           = useState(false)
+  const [error, setError]               = useState('')
+  const [regenerating, setRegenerating] = useState(false)
+  const bottomRef = useRef<HTMLDivElement>(null)
 
-  // ── Cache restore on mount ─────────────────────────────────────────────────
+  // On mount: check what's already in the SQLite cache and restore immediately
   useEffect(() => {
     let cancelled = false
     async function loadCache() {
@@ -194,77 +193,67 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
         if (cancelled) return
 
         if (status.flashcards) {
+          // Full lesson done — restore everything and go to flashcards
           if (status.outline) setOutline(status.outline.content)
           const totalSecs = status.outline?.content.sections.length ?? status.sections.length
-          const arr: ({ title: string; content: string } | undefined)[] = new Array(totalSecs)
-          status.sections.forEach(s => { if (s.section_index < totalSecs) arr[s.section_index] = { title: s.section_title, content: s.content } })
-          setSections(arr)
+          const sectionArray: { title: string; content: string }[] = new Array(totalSecs)
+          status.sections.forEach(s => {
+            if (s.section_index < totalSecs) {
+              sectionArray[s.section_index] = { title: s.section_title, content: s.content }
+            }
+          })
+          setSections(sectionArray)
           setCurrentSection(Math.max(0, totalSecs - 1))
           setFlashcards(status.flashcards.cards)
           setPhase('flashcards')
         } else if (status.sections.length > 0 && status.outline) {
+          // Mid-lesson: restore sections into their correct index positions
           setOutline(status.outline.content)
           const totalSecs = status.outline.content.sections.length
-          const arr: ({ title: string; content: string } | undefined)[] = new Array(totalSecs)
-          status.sections.forEach(s => { if (s.section_index < totalSecs) arr[s.section_index] = { title: s.section_title, content: s.content } })
-          setSections(arr)
+          const sectionArray: { title: string; content: string }[] = new Array(totalSecs)
+          status.sections.forEach(s => {
+            if (s.section_index < totalSecs) {
+              sectionArray[s.section_index] = { title: s.section_title, content: s.content }
+            }
+          })
+          setSections(sectionArray)
+          // Land on the last completed section
           const lastDone = Math.max(...status.sections.map(s => s.section_index))
           setCurrentSection(lastDone)
           setPhase('teaching')
         } else if (status.outline) {
+          // Outline generated, lesson not started
           setOutline(status.outline.content)
           setPhase('outline')
         } else {
+          // Nothing cached
           setPhase('idle')
         }
-      } catch { setPhase('idle') }
+      } catch {
+        setPhase('idle')
+      }
     }
     loadCache()
     return () => { cancelled = true }
   }, [paperId])
 
-  useEffect(() => { contentRef.current?.scrollTo({ top: 0, behavior: 'smooth' }) }, [currentSection])
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [sections, phase])
 
-  // ── Data fetchers ──────────────────────────────────────────────────────────
   async function fetchOutline() {
     setPhase('loading_outline'); setError('')
     try {
       const res = await fetch(`/api/study/${paperId}/outline`, { method: 'POST' })
-      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed') }
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to generate outline') }
       const data = await res.json()
-      setOutline(data.outline); setSections([]); setFlashcards([]); setCurrentSection(0)
+      setOutline(data.outline)
+      setSections([])
+      setFlashcards([])
+      setCurrentSection(0)
       setPhase('outline')
-    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to generate outline.'); setPhase('error') }
-  }
-
-  async function loadSection(index: number) {
-    if (!outline) return
-    if (sections[index]) { setCurrentSection(index); setPhase('teaching'); return }
-    const section = outline.sections[index]
-    setSectionLoading(true)
-    try {
-      const res = await fetch(`/api/study/${paperId}/section`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ section_title: section.title, section_description: section.description, level, section_index: index }),
-      })
-      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed') }
-      const data = await res.json()
-      setSections(prev => { const next = [...prev]; next[index] = { title: section.title, content: data.content }; return next })
-      setCurrentSection(index)
-      setPhase('teaching')
-    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to load section.') }
-    finally { setSectionLoading(false) }
-  }
-
-  async function fetchFlashcards() {
-    setFlashcardsLoading(true)
-    try {
-      const res = await fetch(`/api/study/${paperId}/flashcards`, { method: 'POST' })
-      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed') }
-      const data = await res.json()
-      setFlashcards(data.cards ?? []); setCardIndex(0); setFlipped(false); setPhase('flashcards')
-    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Failed to generate flashcards.') }
-    finally { setFlashcardsLoading(false) }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to generate outline.')
+      setPhase('error')
+    }
   }
 
   async function handleRegenerate() {
@@ -273,26 +262,91 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
       await bustStudyCache(paperId)
       setOutline(null); setSections([]); setFlashcards([]); setCurrentSection(0); setError('')
       setPhase('idle')
-    } catch { setError('Failed to clear cache.') }
-    finally { setRegenerating(false) }
+    } catch {
+      setError('Failed to clear cache. Please try again.')
+    } finally { setRegenerating(false) }
   }
 
-  // Pre-fetch next section silently while user reads current
+  async function startTeaching() {
+    if (!outline) return
+    // If sections are already cached (restored on mount), go straight to section 0
+    // without wiping. Only reset if genuinely starting fresh.
+    if (sections.length === 0) {
+      setCurrentSection(0)
+      await loadSection(0)
+    }
+    setPhase('teaching')
+  }
+
+  async function loadSection(index: number) {
+    if (!outline) return
+    const section = outline.sections[index]
+    setSectionLoading(true)
+    try {
+      const res = await fetch(`/api/study/${paperId}/section`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          section_title:       section.title,
+          section_description: section.description,
+          level,
+          section_index:       index,   // stored in DB for correct ordering on restore
+        }),
+      })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to load section') }
+      const data = await res.json()
+      setSections(prev => {
+        // Place at exact index — fill gaps with null placeholders if needed
+        const next = [...prev]
+        next[index] = { title: section.title, content: data.content }
+        return next
+      })
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load section.')
+    } finally { setSectionLoading(false) }
+  }
+
+  // Pre-fetch next section in background while user reads current
   useEffect(() => {
     if (!outline || phase !== 'teaching' || sectionLoading) return
-    const next = currentSection + 1
-    if (next >= outline.sections.length || sections[next]) return
-    const t = setTimeout(() => { loadSection(next) }, 1000)
-    return () => clearTimeout(t)
+    const nextIndex = currentSection + 1
+    if (nextIndex >= outline.sections.length) return
+    if (sections[nextIndex]) return  // already loaded (cached or pre-fetched)
+    const timer = setTimeout(() => { loadSection(nextIndex) }, 800)
+    return () => clearTimeout(timer)
   }, [sections, currentSection, phase, sectionLoading, outline])
 
-  // ── Derived values ─────────────────────────────────────────────────────────
-  const totalSections  = outline?.sections.length ?? 0
-  const loadedCount    = sections.filter(Boolean).length
-  const progress       = totalSections > 0 ? (loadedCount / totalSections) * 100 : 0
-  const isLastSection  = currentSection === totalSections - 1
+  async function nextSection() {
+    if (!outline) return
+    const next = currentSection + 1
+    if (next < outline.sections.length) {
+      setCurrentSection(next)
+      if (!sections[next]) { await loadSection(next) }  // load only if not already cached
+    } else {
+      await fetchFlashcards()
+    }
+  }
 
-  // ── Shared sub-components ──────────────────────────────────────────────────
+  async function fetchFlashcards() {
+    setFlashcardsLoading(true)
+    try {
+      const res = await fetch(`/api/study/${paperId}/flashcards`, { method: 'POST' })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed to generate flashcards') }
+      const data = await res.json()
+      setFlashcards(data.cards ?? [])
+      setCardIndex(0); setFlipped(false)
+      setPhase('flashcards')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to generate flashcards.')
+    } finally { setFlashcardsLoading(false) }
+  }
+
+  function prevCard() { setCardIndex(i => Math.max(0, i - 1)); setFlipped(false) }
+  function nextCard() { setCardIndex(i => Math.min(flashcards.length - 1, i + 1)); setFlipped(false) }
+
+  const totalSections  = outline?.sections.length ?? 0
+  const loadedSections = sections.filter(Boolean).length
+  const progress = totalSections > 0 ? (loadedSections / totalSections) * 100 : 0
+
   const RegenerateBtn = () => (
     <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={handleRegenerate}
       disabled={regenerating} style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>
@@ -300,55 +354,6 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
     </button>
   )
 
-  const BackToOutlineBtn = () => (
-    <button suppressHydrationWarning className="btn btn-ghost btn-sm"
-      onClick={() => setPhase('outline')}
-      style={{ fontSize: '0.8125rem', color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-      ☰ Outline
-    </button>
-  )
-
-  // ── Outline section row — clickable ───────────────────────────────────────
-  const OutlineSectionRow = ({ s, i }: { s: StudySection; i: number }) => {
-    const isDone    = !!sections[i]
-    const isLoading = sectionLoading && !sections[i] && i === currentSection
-    return (
-      <button suppressHydrationWarning
-        onClick={() => loadSection(i)}
-        disabled={isLoading}
-        style={{
-          display: 'flex', alignItems: 'flex-start', gap: '12px',
-          padding: '12px', width: '100%', textAlign: 'left',
-          background: isDone ? 'var(--bg-2)' : 'var(--bg)',
-          borderRadius: 'var(--radius)',
-          border: `1px solid ${isDone ? 'var(--study-color)33' : 'var(--border)'}`,
-          cursor: isLoading ? 'wait' : 'pointer',
-          transition: 'border-color 0.15s, background 0.15s',
-          opacity: isLoading ? 0.6 : 1,
-        }}
-        onMouseEnter={e => { if (!isLoading) (e.currentTarget as HTMLElement).style.borderColor = 'var(--study-color)' }}
-        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = isDone ? 'var(--study-color)33' : 'var(--border)' }}
-      >
-        <div style={{
-          minWidth: '24px', height: '24px', borderRadius: '50%',
-          background: isDone ? 'var(--study-color)' : 'var(--bg-3)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '0.6875rem', fontWeight: 700, flexShrink: 0, marginTop: '1px',
-          color: isDone ? '#fff' : 'var(--text-3)',
-        }}>
-          {isLoading ? <Spinner size="spinner-sm" /> : isDone ? '✓' : i + 1}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ fontSize: '0.875rem', fontWeight: 600, color: isDone ? 'var(--study-color)' : 'var(--text)', marginBottom: '3px' }}>{s.title}</p>
-          <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', lineHeight: 1.4 }}>{s.description}</p>
-          {isDone && <p style={{ fontSize: '0.75rem', color: 'var(--study-color)', marginTop: '4px', fontWeight: 500 }}>Completed — click to review →</p>}
-          {!isDone && <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: '4px' }}>Click to begin this section →</p>}
-        </div>
-      </button>
-    )
-  }
-
-  // ── Phase renders ──────────────────────────────────────────────────────────
   if (phase === 'loading_cache') return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '16px' }}>
       <Spinner size="spinner-lg" />
@@ -360,7 +365,7 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
       <div style={{ textAlign: 'center', marginBottom: '8px' }}>
         <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--study-color)', marginBottom: '8px' }}>Study Mode</p>
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-2)', maxWidth: '360px', lineHeight: 1.6 }}>The AI will analyze this paper and create a personalized learning plan. Review the plan, then learn section by section.</p>
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-2)', maxWidth: '360px', lineHeight: 1.6 }}>The AI will analyze this paper and create a personalized learning plan for you. Review the plan, then learn step by step.</p>
       </div>
       <button suppressHydrationWarning className="btn btn-primary" onClick={fetchOutline} style={{ background: 'var(--study-color)', minWidth: '200px' }}>Generate Learning Plan</button>
     </div>
@@ -377,13 +382,12 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px', gap: '16px' }}>
       <div className="notice notice-error" style={{ maxWidth: '400px' }}>{error}</div>
       <div style={{ display: 'flex', gap: '8px' }}>
-        <button suppressHydrationWarning className="btn btn-ghost" onClick={() => { setPhase(outline ? 'outline' : 'idle'); setError('') }}>← Back</button>
+        <button suppressHydrationWarning className="btn btn-ghost" onClick={() => { setPhase('idle'); setError('') }}>Try again</button>
         <RegenerateBtn />
       </div>
     </div>
   )
 
-  // ── Outline view — sections are clickable ──────────────────────────────────
   if (phase === 'outline' && outline) return (
     <div style={{ padding: '24px', maxWidth: '680px', margin: '0 auto' }}>
       <div className="study-outline-card" style={{ marginBottom: '20px' }}>
@@ -391,190 +395,110 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--study-color)', display: 'inline-block' }} />
             <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--study-color)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Your Learning Plan</span>
-            {loadedCount > 0 && (
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', background: 'var(--bg-3)', padding: '2px 8px', borderRadius: '999px' }}>
-                {loadedCount}/{totalSections} completed
-              </span>
-            )}
           </div>
           <RegenerateBtn />
         </div>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-2)', lineHeight: 1.6, marginBottom: '20px' }}>{outline.summary}</p>
-
-        {/* Progress bar — visible if any sections done */}
-        {loadedCount > 0 && (
-          <div style={{ marginBottom: '16px' }}>
-            <div className="study-progress-bar"><div className="study-progress-fill" style={{ width: `${progress}%` }} /></div>
-          </div>
-        )}
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {outline.sections.map((s, i) => <OutlineSectionRow key={i} s={s} i={i} />)}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {outline.sections.map((s, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '12px', background: 'var(--bg-2)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+              <div className="study-section-number" style={{ marginTop: '1px' }}>{i + 1}</div>
+              <div>
+                <p style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text)', marginBottom: '3px' }}>{s.title}</p>
+                <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', lineHeight: 1.4 }}>{s.description}</p>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
-
-      {/* Primary CTA changes based on progress */}
-      {loadedCount === 0 && (
-        <button suppressHydrationWarning className="btn btn-primary btn-lg" onClick={() => loadSection(0)}
-          style={{ background: 'var(--study-color)', width: '100%' }}>
-          Begin Learning →
-        </button>
-      )}
-      {loadedCount > 0 && loadedCount < totalSections && (
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button suppressHydrationWarning className="btn btn-primary btn-lg" onClick={() => loadSection(loadedCount)}
-            style={{ background: 'var(--study-color)', flex: 1 }}>
-            Continue — Section {loadedCount + 1} →
-          </button>
-          {flashcards.length === 0 && (
-            <button suppressHydrationWarning className="btn btn-ghost btn-lg" onClick={fetchFlashcards} disabled={flashcardsLoading}>
-              {flashcardsLoading ? 'Generating…' : 'Skip to Flashcards'}
-            </button>
-          )}
-        </div>
-      )}
-      {loadedCount === totalSections && (
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button suppressHydrationWarning className="btn btn-primary btn-lg" onClick={() => loadSection(0)}
-            style={{ background: 'var(--study-color)', flex: 1 }}>
-            Review from Start →
-          </button>
-          <button suppressHydrationWarning className="btn btn-ghost btn-lg" onClick={() => setPhase('flashcards')} disabled={flashcards.length === 0}>
-            Flashcards →
-          </button>
-        </div>
-      )}
+      <button suppressHydrationWarning className="btn btn-primary btn-lg" onClick={startTeaching} style={{ background: 'var(--study-color)', width: '100%' }}>Begin Learning →</button>
     </div>
   )
 
-  // ── Teaching view ──────────────────────────────────────────────────────────
   if (phase === 'teaching') {
+    const isLastSection = currentSection === totalSections - 1
     const currentContent = sections[currentSection]
 
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-
-        {/* Sticky header */}
-        <div style={{ flexShrink: 0, padding: '12px 24px', borderBottom: '1px solid var(--border)', background: 'var(--bg-2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-          <BackToOutlineBtn />
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <span style={{ fontSize: '0.8125rem', color: 'var(--study-color)', fontWeight: 500 }}>Section {currentSection + 1} of {totalSections}</span>
+      <div style={{ padding: '24px', maxWidth: '720px', margin: '0 auto' }}>
+        <div style={{ marginBottom: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <span style={{ fontSize: '0.8125rem', color: 'var(--study-color)', fontWeight: 500 }}>Section {currentSection + 1} of {totalSections}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{Math.round(progress)}%</span>
+              <RegenerateBtn />
             </div>
-            <div className="study-progress-bar"><div className="study-progress-fill" style={{ width: `${progress}%` }} /></div>
           </div>
-          <RegenerateBtn />
+          <div className="study-progress-bar"><div className="study-progress-fill" style={{ width: `${progress}%` }} /></div>
         </div>
 
-        {/* Scrollable content */}
-        <div ref={contentRef} style={{ flex: 1, overflowY: 'auto', padding: '24px', maxWidth: '720px', margin: '0 auto', width: '100%' }}>
-          {sectionLoading && !currentContent ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '60px 0', color: 'var(--text-3)', fontSize: '0.875rem', justifyContent: 'center' }}>
-              <Spinner /><span>Loading section…</span>
+        {sectionLoading && !currentContent ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '40px 0', color: 'var(--text-3)', fontSize: '0.875rem', justifyContent: 'center' }}>
+            <Spinner /><span>Loading section…</span>
+          </div>
+        ) : currentContent ? (
+          <div className="study-section-block fade-in">
+            <div className="study-section-header">
+              <div className="study-section-number">{currentSection + 1}</div>
+              <h3 style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--text)' }}>{currentContent.title}</h3>
             </div>
-          ) : currentContent ? (
-            <div className="study-section-block fade-in">
-              <div className="study-section-header">
-                <div className="study-section-number">{currentSection + 1}</div>
-                <h3 style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--text)' }}>{currentContent.title}</h3>
-              </div>
-              <MarkdownWithMermaid content={currentContent.content} />
-            </div>
-          ) : null}
+            <MarkdownWithMermaid content={currentContent.content} />
+          </div>
+        ) : null}
 
-          {error && <div className="notice notice-error" style={{ margin: '12px 0' }}>{error}</div>}
-        </div>
+        {error && <div className="notice notice-error" style={{ marginBottom: '12px' }}>{error}</div>}
 
-        {/* Sticky footer nav */}
-        <div style={{ flexShrink: 0, padding: '12px 24px', borderTop: '1px solid var(--border)', background: 'var(--bg-2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-          <button suppressHydrationWarning className="btn btn-ghost btn-sm"
-            onClick={() => { if (currentSection > 0) loadSection(currentSection - 1) }}
-            disabled={currentSection === 0}>
-            ← Previous
-          </button>
-
-          {/* Section jump dots */}
-          {totalSections <= 10 && (
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              {outline?.sections.map((_, i) => (
-                <button suppressHydrationWarning key={i}
-                  onClick={() => loadSection(i)}
-                  title={outline.sections[i].title}
-                  style={{
-                    width: i === currentSection ? '20px' : '8px',
-                    height: '8px', borderRadius: '999px', border: 'none',
-                    cursor: 'pointer', padding: 0, transition: 'all 0.2s',
-                    background: i === currentSection
-                      ? 'var(--study-color)'
-                      : sections[i] ? 'var(--study-color)66' : 'var(--border)',
-                  }}
-                />
-              ))}
-            </div>
-          )}
-
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px' }}>
+          <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={() => { if (currentSection > 0) { setCurrentSection(s => s - 1) } }} disabled={currentSection === 0}>← Previous</button>
           {flashcardsLoading
-            ? <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-3)', fontSize: '0.875rem' }}><Spinner size="spinner-sm" /><span>Generating…</span></div>
+            ? <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-3)', fontSize: '0.875rem' }}><Spinner size="spinner-sm" /><span>Generating flashcards…</span></div>
             : (
-              <button suppressHydrationWarning className="btn btn-primary btn-sm"
-                onClick={() => isLastSection ? fetchFlashcards() : loadSection(currentSection + 1)}
+              <button suppressHydrationWarning className="btn btn-primary" onClick={nextSection}
                 disabled={sectionLoading && !sections[currentSection + 1]}
                 style={{ background: 'var(--study-color)' }}>
-                {isLastSection ? 'Finish & Flashcards →' : 'Next →'}
+                {isLastSection ? 'Finish & Get Flashcards →' : 'Next Section →'}
               </button>
             )
           }
         </div>
+        <div ref={bottomRef} />
       </div>
     )
   }
 
-  // ── Flashcards view ────────────────────────────────────────────────────────
   if (phase === 'flashcards' && flashcards.length > 0) {
     const card = flashcards[cardIndex]
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-
-        {/* Header with back button */}
-        <div style={{ flexShrink: 0, padding: '12px 24px', borderBottom: '1px solid var(--border)', background: 'var(--bg-2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <BackToOutlineBtn />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '0.8125rem', color: 'var(--study-color)', fontWeight: 600 }}>Flashcards</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>{cardIndex + 1} / {flashcards.length}</span>
+      <div style={{ padding: '24px', maxWidth: '600px', margin: '0 auto' }}>
+        <div style={{ marginBottom: '20px', textAlign: 'center' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+            <p style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--study-color)' }}>Flashcards</p>
+            <RegenerateBtn />
           </div>
-          <RegenerateBtn />
+          <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)' }}>Card {cardIndex + 1} of {flashcards.length} · Click card to reveal answer</p>
         </div>
-
-        <div style={{ flex: 1, overflowY: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <p style={{ fontSize: '0.8125rem', color: 'var(--text-3)', marginBottom: '20px' }}>Click card to reveal answer</p>
-
-          {/* Dot navigation */}
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginBottom: '20px', flexWrap: 'wrap', maxWidth: '400px' }}>
-            {flashcards.map((_, i) => (
-              <button suppressHydrationWarning key={i} onClick={() => { setCardIndex(i); setFlipped(false) }}
-                style={{ width: '8px', height: '8px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: i === cardIndex ? 'var(--study-color)' : 'var(--border)', transition: 'background 0.15s', padding: 0 }} />
-            ))}
-          </div>
-
-          <div className={`flashcard-scene${flipped ? ' flipped' : ''}`} onClick={() => setFlipped(f => !f)} style={{ width: '100%', maxWidth: '520px' }}>
-            <div className="flashcard-inner">
-              <div className="flashcard-front">
-                <div className="flashcard-label">Question</div>
-                <div className="flashcard-text">{card.front}</div>
-                <div className="flashcard-hint">Click to reveal answer</div>
-              </div>
-              <div className="flashcard-back">
-                <div className="flashcard-label">Answer</div>
-                <div className="flashcard-text">{card.back}</div>
-              </div>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginBottom: '20px' }}>
+          {flashcards.map((_, i) => (
+            <button suppressHydrationWarning key={i} onClick={() => { setCardIndex(i); setFlipped(false) }}
+              style={{ width: '8px', height: '8px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: i === cardIndex ? 'var(--study-color)' : 'var(--border)', transition: 'background 0.15s', padding: 0 }} />
+          ))}
+        </div>
+        <div className={`flashcard-scene${flipped ? ' flipped' : ''}`} onClick={() => setFlipped(f => !f)}>
+          <div className="flashcard-inner">
+            <div className="flashcard-front">
+              <div className="flashcard-label">Question</div>
+              <div className="flashcard-text">{card.front}</div>
+              <div className="flashcard-hint">Click to reveal answer</div>
+            </div>
+            <div className="flashcard-back">
+              <div className="flashcard-label">Answer</div>
+              <div className="flashcard-text">{card.back}</div>
             </div>
           </div>
         </div>
-
-        <div style={{ flexShrink: 0, padding: '12px 24px', borderTop: '1px solid var(--border)', background: 'var(--bg-2)', display: 'flex', justifyContent: 'space-between' }}>
-          <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={() => { setCardIndex(i => Math.max(0, i - 1)); setFlipped(false) }} disabled={cardIndex === 0}>← Previous</button>
-          <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={() => { setCardIndex(i => Math.min(flashcards.length - 1, i + 1)); setFlipped(false) }} disabled={cardIndex === flashcards.length - 1}>Next →</button>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px' }}>
+          <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={prevCard} disabled={cardIndex === 0}>← Previous</button>
+          <button suppressHydrationWarning className="btn btn-ghost btn-sm" onClick={nextCard} disabled={cardIndex === flashcards.length - 1}>Next →</button>
         </div>
       </div>
     )
@@ -582,7 +506,6 @@ function StudyPanel({ paperId, level }: { paperId: string; level: string }) {
 
   return null
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Technical Panel — with section caching (Optimization 4)
@@ -1775,10 +1698,12 @@ function ChatView({ initialPapers, onNewSearch, sessions, setSessions, sidebarCo
   const [modeSwitching, setModeSwitching] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // OPTIMIZATION 2: Follow-up suggestions opt-in toggle, persisted to localStorage
-  const [suggestionsEnabled, setSuggestionsEnabled] = useState(() =>
-    getStoredBool('researchrag_suggestions_enabled', false)
-  )
+  // Follow-up suggestions opt-in toggle, persisted to localStorage.
+  // Initialised to false (server-safe) then synced from localStorage after mount.
+  const [suggestionsEnabled, setSuggestionsEnabled] = useState(false)
+  useEffect(() => {
+    setSuggestionsEnabled(getStoredBool('researchrag_suggestions_enabled', false))
+  }, [])
   function toggleSuggestions() {
     setSuggestionsEnabled(v => {
       const next = !v
@@ -2072,9 +1997,16 @@ export default function App() {
   // ── Global session state — lifted out of ChatView ─────────────────────────
   const [sessions, setSessions]           = useState<Session[]>([])
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
-    getStoredBool('researchrag_sidebar_collapsed', false)
-  )
+
+  // Always initialise to false (the server-safe default) so the server and
+  // client render the same HTML on first paint. After mount, read the real
+  // value from localStorage and update — this avoids the hydration mismatch
+  // caused by useState(() => localStorage.getItem(...)) which the server
+  // cannot evaluate.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  useEffect(() => {
+    setSidebarCollapsed(getStoredBool('researchrag_sidebar_collapsed', false))
+  }, [])
 
   function toggleSidebar() {
     setSidebarCollapsed(v => {

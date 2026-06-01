@@ -105,7 +105,11 @@ class Config:
         self.CAROUSEL_OUTPUT_DIR: str = os.getenv("CAROUSEL_OUTPUT_DIR", "./carousel_outputs")
 
         # ── Rate limits ───────────────────────────────────────────────────────
-        self.ARXIV_RATE_LIMIT:  float = _float_env("ARXIV_RATE_LIMIT",  "3.0")
+        self.ARXIV_RATE_LIMIT:        float = _float_env("ARXIV_RATE_LIMIT",        "3.0")
+        # Timeout for the first arXiv search attempt. A second attempt with a
+        # simplified query will be made if this expires.
+        self.ARXIV_FIRST_TIMEOUT:  int   = _int_env("ARXIV_FIRST_TIMEOUT",  "10")
+        self.ARXIV_RETRY_TIMEOUT:  int   = _int_env("ARXIV_RETRY_TIMEOUT",   "8")
         self.PUBMED_RATE_LIMIT: float = _float_env("PUBMED_RATE_LIMIT", "0.4")
 
         # ── Chunking ──────────────────────────────────────────────────────────

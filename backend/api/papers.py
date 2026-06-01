@@ -382,13 +382,14 @@ async def search_papers(request: SearchRequest):
             docs.extend(arxiv_docs)
     except Exception as exc:
         # arXiv failure is non-fatal when source=both — PubMed may still work
+        msg = str(exc)
+        # Surface rate-limit and timeout errors with the exact actionable message
+        # from the fetcher rather than wrapping it in a generic 502 detail.
+        status = 429 if ("rate" in msg.lower() or "429" in msg) else 502
         if source == "arxiv":
-            raise HTTPException(
-                status_code=502,
-                detail=f"arXiv search failed: {exc}",
-            )
-        errors.append(f"arXiv: {exc}")
-        logger.warning("arXiv search failed (continuing with PubMed): %s", exc)
+            raise HTTPException(status_code=status, detail=msg)
+        errors.append(f"arXiv: {msg}")
+        logger.warning("arXiv search failed (continuing with PubMed): %s", msg)
 
     try:
         if source in ("pubmed", "both"):
